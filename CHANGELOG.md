@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.0](https://github.com/vitalvas/nat-pmp/compare/v0.2.0...v0.3.0) (2026-07-04)
+
+
+### Features
+
+* resolve internal address from an interface via internal_iface ([1b16fab](https://github.com/vitalvas/nat-pmp/commit/1b16fabfa11a4ea3d4186854477a28e9b5fbad9b))
+* target a specific LAN address per mapping via internal_address ([c846f97](https://github.com/vitalvas/nat-pmp/commit/c846f97fae9885e2b7748cf5b8fe6b2fd9d5452d))
+
 ## [0.2.0](https://github.com/vitalvas/nat-pmp/compare/v0.1.0...v0.2.0) (2026-07-04)
 
 

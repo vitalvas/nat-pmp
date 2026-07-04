@@ -377,6 +377,81 @@ func TestTimeUntilNext(t *testing.T) {
 	})
 }
 
+func TestReconcileOneRequireListener(t *testing.T) {
+	req := mapping.Request{Protocol: mapping.TCP, InternalPort: 22000, ExternalPort: 22000, RequireListener: true}
+	k := keyOf(req)
+	now := time.Unix(1000, 0)
+
+	newGated := func(t *testing.T, client *fakeClient, present bool, checkErr error) *Daemon {
+		t.Helper()
+		cfg := testConfig(config.Mapping{Protocol: "tcp", InternalPort: 22000, ExternalPort: 22000, RequireListener: true})
+		d := newDaemon(t, cfg, client,
+			WithClock(func() time.Time { return now }),
+			WithListener(func(mapping.Protocol, uint16) (bool, error) { return present, checkErr }),
+		)
+		d.client = client
+		return d
+	}
+
+	t.Run("no listener skips creation and schedules poll", func(t *testing.T) {
+		client := newFakeClient()
+		d := newGated(t, client, false, nil)
+
+		d.reconcileOne(context.Background(), req)
+
+		mapCalls, _ := client.counts()
+		assert.Equal(t, 0, mapCalls)
+		assert.Empty(t, d.leases)
+		assert.Equal(t, now.Add(listenerPollInterval), d.nextAt[k])
+	})
+
+	t.Run("listener present creates mapping", func(t *testing.T) {
+		client := newFakeClient()
+		d := newGated(t, client, true, nil)
+
+		d.reconcileOne(context.Background(), req)
+
+		mapCalls, _ := client.counts()
+		assert.Equal(t, 1, mapCalls)
+		assert.Contains(t, d.leases, k)
+	})
+
+	t.Run("listener gone releases active mapping", func(t *testing.T) {
+		client := newFakeClient()
+		d := newGated(t, client, false, nil)
+		d.leases[k] = mapping.Lease{Protocol: mapping.TCP, InternalPort: 22000, ExternalPort: 22000}
+
+		d.reconcileOne(context.Background(), req)
+
+		_, unmapCalls := client.counts()
+		assert.Equal(t, 1, unmapCalls)
+		assert.NotContains(t, d.leases, k)
+		assert.Equal(t, now.Add(listenerPollInterval), d.nextAt[k])
+	})
+
+	t.Run("check error assumes present and maps", func(t *testing.T) {
+		client := newFakeClient()
+		d := newGated(t, client, false, assert.AnError)
+
+		d.reconcileOne(context.Background(), req)
+
+		mapCalls, _ := client.counts()
+		assert.Equal(t, 1, mapCalls)
+		assert.Contains(t, d.leases, k)
+	})
+
+	t.Run("release failure still clears lease", func(t *testing.T) {
+		client := newFakeClient()
+		client.unmapErr = assert.AnError
+		d := newGated(t, client, false, nil)
+		d.leases[k] = mapping.Lease{Protocol: mapping.TCP, InternalPort: 22000, ExternalPort: 22000}
+
+		d.reconcileOne(context.Background(), req)
+
+		assert.NotContains(t, d.leases, k)
+	})
+}
+
 func TestReconcileOneRecordsLease(t *testing.T) {
 	client := newFakeClient()
 	client.grantedExternal = 40000 // gateway assigns a different port

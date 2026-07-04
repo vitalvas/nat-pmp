@@ -56,6 +56,10 @@ type Request struct {
 	// Lease is the requested lifetime of the mapping. A value of zero asks the
 	// client to apply its default lifetime.
 	Lease time.Duration
+	// RequireListener gates the mapping on a local listener: when true, the
+	// forwarding is only created while a socket is bound to InternalPort, and is
+	// released when the listener goes away.
+	RequireListener bool
 }
 
 // Validate reports whether the request is well formed.

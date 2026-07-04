@@ -63,6 +63,10 @@ type Mapping struct {
 	Description string `yaml:"description" json:"description"`
 	// Lease is the requested mapping lifetime.
 	Lease time.Duration `yaml:"lease" json:"lease" default:"1h"`
+	// RequireListener gates the mapping on a local listener bound to
+	// InternalPort: the forwarding is only created while a listener is present
+	// and is released when it disappears.
+	RequireListener bool `yaml:"require_listener" json:"require_listener"`
 }
 
 // protocols returns the transport protocols a mapping covers: one for tcp/udp,
@@ -81,11 +85,12 @@ func (m Mapping) Requests() []mapping.Request {
 	requests := make([]mapping.Request, 0, len(protocols))
 	for _, proto := range protocols {
 		requests = append(requests, mapping.Request{
-			Protocol:     proto,
-			InternalPort: m.InternalPort,
-			ExternalPort: m.ExternalPort,
-			Description:  m.Description,
-			Lease:        m.Lease,
+			Protocol:        proto,
+			InternalPort:    m.InternalPort,
+			ExternalPort:    m.ExternalPort,
+			Description:     m.Description,
+			Lease:           m.Lease,
+			RequireListener: m.RequireListener,
 		})
 	}
 	return requests

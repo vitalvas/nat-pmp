@@ -13,6 +13,7 @@ import (
 
 	"github.com/vitalvas/nat-pmp/internal/config"
 	"github.com/vitalvas/nat-pmp/internal/mapping"
+	"github.com/vitalvas/nat-pmp/internal/portcheck"
 	"github.com/vitalvas/nat-pmp/internal/portmapper"
 	"github.com/vitalvas/nat-pmp/internal/portmapper/upnp"
 )
@@ -24,11 +25,20 @@ const releaseTimeout = 5 * time.Second
 // create or renew.
 const retryBackoff = 30 * time.Second
 
+// listenerPollInterval is how often a listener-gated mapping without an active
+// listener is re-checked, so the forwarding is created promptly once a listener
+// appears.
+const listenerPollInterval = 15 * time.Second
+
 // gatewayFunc discovers the LAN gateway address.
 type gatewayFunc func() (netip.Addr, error)
 
 // detectFunc selects a working port-mapping client for the gateway.
 type detectFunc func(ctx context.Context, gateway netip.Addr) (portmapper.Client, error)
+
+// listenerFunc reports whether a local listener is bound to the given
+// protocol's port.
+type listenerFunc func(protocol mapping.Protocol, port uint16) (bool, error)
 
 // Daemon maintains the configured port mappings.
 type Daemon struct {
@@ -36,6 +46,7 @@ type Daemon struct {
 	log      *slog.Logger
 	gateway  gatewayFunc
 	detect   detectFunc
+	listener listenerFunc
 	now      func() time.Time
 	newTimer func(d time.Duration) *time.Timer
 
@@ -74,12 +85,18 @@ func WithClock(now func() time.Time) Option {
 	return func(d *Daemon) { d.now = now }
 }
 
+// WithListener overrides local listener detection. Used in tests.
+func WithListener(f listenerFunc) Option {
+	return func(d *Daemon) { d.listener = f }
+}
+
 // New builds a daemon from configuration.
 func New(cfg config.Config, log *slog.Logger, opts ...Option) *Daemon {
 	d := &Daemon{
 		cfg:      cfg,
 		log:      log,
 		gateway:  defaultGateway,
+		listener: portcheck.HasListener,
 		now:      time.Now,
 		newTimer: time.NewTimer,
 		leases:   make(map[key]mapping.Lease),
@@ -143,6 +160,11 @@ func (d *Daemon) reconcileAll(ctx context.Context) {
 
 func (d *Daemon) reconcileOne(ctx context.Context, req mapping.Request) {
 	k := keyOf(req)
+
+	if req.RequireListener && !d.hasListener(k, req) {
+		return
+	}
+
 	mapReq := d.mapRequest(k, req)
 	lease, err := ensure(ctx, d.client, d.log, mapReq)
 	if err != nil {
@@ -151,6 +173,59 @@ func (d *Daemon) reconcileOne(ctx context.Context, req mapping.Request) {
 	}
 	d.leases[k] = lease
 	d.nextAt[k] = lease.RenewBefore()
+}
+
+// hasListener reports whether a local listener is bound to the mapping's
+// internal port. When no listener is present, any existing forwarding for the
+// mapping is released and the mapping is rescheduled for a near-term poll; the
+// caller should then skip creating or renewing it. A listener-check error is
+// treated conservatively as "listener present" so a transient /proc read
+// failure does not tear down a working forwarding.
+func (d *Daemon) hasListener(k key, req mapping.Request) bool {
+	present, err := d.listener(req.Protocol, req.InternalPort)
+	if err != nil {
+		d.log.Warn("listener check failed; assuming present",
+			"protocol", req.Protocol,
+			"internal_port", req.InternalPort,
+			"error", err,
+		)
+		return true
+	}
+	if present {
+		return true
+	}
+
+	if _, active := d.leases[k]; active {
+		d.log.Info("listener gone; releasing mapping",
+			"protocol", req.Protocol,
+			"internal_port", req.InternalPort,
+		)
+		d.releaseOne(k, req)
+	}
+	d.nextAt[k] = d.now().Add(listenerPollInterval)
+	return false
+}
+
+// releaseOne releases a single active mapping and clears its recorded lease,
+// regardless of whether the release succeeds. It is used when a listener
+// disappears; on shutdown releaseAll handles every mapping instead.
+func (d *Daemon) releaseOne(k key, req mapping.Request) {
+	lease, ok := d.leases[k]
+	if !ok {
+		return
+	}
+	releaseReq := releaseRequest(req, lease)
+	ctx, cancel := context.WithTimeout(context.Background(), releaseTimeout)
+	err := d.client.Unmap(ctx, releaseReq)
+	cancel()
+	if err != nil {
+		d.log.Warn("release failed",
+			"protocol", req.Protocol,
+			"internal_port", req.InternalPort,
+			"error", err,
+		)
+	}
+	delete(d.leases, k)
 }
 
 // mapRequest preserves an automatically assigned external port across

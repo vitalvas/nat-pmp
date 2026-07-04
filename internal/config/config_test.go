@@ -267,16 +267,18 @@ func TestMappingRequests(t *testing.T) {
 		assert.Equal(t, uint16(30000), req.ExternalPort)
 		assert.Equal(t, "test", req.Description)
 		assert.Equal(t, time.Hour, req.Lease)
+		assert.False(t, req.RequireListener)
 		require.NoError(t, req.Validate())
 	})
 
 	t.Run("both expands into tcp and udp", func(t *testing.T) {
 		m := Mapping{
-			Protocol:     "both",
-			InternalPort: 22000,
-			ExternalPort: 22000,
-			Description:  "test",
-			Lease:        time.Hour,
+			Protocol:        "both",
+			InternalPort:    22000,
+			ExternalPort:    22000,
+			Description:     "test",
+			Lease:           time.Hour,
+			RequireListener: true,
 		}
 		reqs := m.Requests()
 		require.Len(t, reqs, 2)
@@ -285,6 +287,7 @@ func TestMappingRequests(t *testing.T) {
 		for _, req := range reqs {
 			assert.Equal(t, uint16(22000), req.InternalPort)
 			assert.Equal(t, uint16(22000), req.ExternalPort)
+			assert.True(t, req.RequireListener)
 			require.NoError(t, req.Validate())
 		}
 	})

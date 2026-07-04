@@ -17,6 +17,9 @@ library.
   lease lifetime.
 - Releases all mappings on `SIGINT`/`SIGTERM` for a clean shutdown.
 - Re-creates mappings automatically if the router reboots and loses state.
+- Optionally gates a mapping on a local listener: with `require_listener`, the
+  forwarding is only opened while a socket is bound to the internal port and is
+  released when the listener goes away.
 - Reports the external IP and the actual external port the router assigned
   (which may differ from the requested port).
 - Configured entirely from a YAML file, with environment-variable overrides.
@@ -62,11 +65,24 @@ mappings:
     internal_port: 51820
     # external_port omitted -> router assigns one
     description: wireguard
+    require_listener: true  # only forward while a socket is bound to 51820
 
   - protocol: both       # forwards the port over both TCP and UDP
     internal_port: 3478
     external_port: 3478
     description: turn
+
+  - protocol: tcp
+    internal_port: 25565
+    external_port: 25565
+    description: minecraft-java
+    require_listener: true  # only forward while the server is running
+
+  - protocol: udp
+    internal_port: 19132
+    external_port: 19132
+    description: minecraft-bedrock
+    require_listener: true  # only forward while the server is running
 ```
 
 Use `protocol: both` to forward a port over TCP and UDP at once. It is a
@@ -85,6 +101,7 @@ the underlying protocols map one transport per request.
 | `mappings[].external_port` | uint16 | `0`     | Requested WAN-side port. `0` lets the router choose a port.        |
 | `mappings[].description` | string   | `""`    | Human-readable label for the mapping.                              |
 | `mappings[].lease`       | duration | `1h`    | Requested mapping lifetime.                                        |
+| `mappings[].require_listener` | bool | `false` | Only open the mapping while a local listener is bound to the internal port; release it when the listener disappears. |
 
 ### Environment overrides
 
@@ -129,6 +146,19 @@ flowchart TD
   actually granted. If a renewal fails (for example, because the router
   rebooted), the mapping is re-created.
 - **Shutdown** releases every active mapping on a best-effort basis.
+
+### Listener gating
+
+A mapping with `require_listener: true` is only opened while a local socket is
+bound to its internal port. The daemon determines this by reading
+`/proc/net/tcp`, `/proc/net/tcp6`, `/proc/net/udp`, and `/proc/net/udp6`: a TCP
+mapping requires a socket in the `LISTEN` state, and a UDP mapping requires any
+socket bound to the port. While no listener is present the mapping is not
+created and is re-checked every 15 seconds, so the forwarding opens promptly
+once a listener appears. If the listener later disappears, the mapping is
+released. When the listener check itself fails (for example, a `/proc` read
+error), the daemon conservatively assumes a listener is present so a transient
+failure does not tear down a working forwarding.
 
 ## Protocols
 

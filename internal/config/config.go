@@ -43,6 +43,11 @@ type Config struct {
 	// empty value lets the daemon derive the address from the route to the
 	// gateway.
 	InternalAddress string `yaml:"internal_address" json:"internal_address"`
+	// InternalIface is the default network interface whose first usable IPv4
+	// address mappings forward to. It is mutually exclusive with
+	// internal_address at the same level. An empty value falls back to
+	// internal_address or the auto-derived address.
+	InternalIface string `yaml:"internal_iface" json:"internal_iface"`
 	// Mappings is the list of desired port forwardings.
 	Mappings []Mapping `yaml:"mappings" json:"mappings"`
 	// Detect configures protocol auto-detection.
@@ -68,6 +73,10 @@ type Mapping struct {
 	// the top-level internal_address. An empty value inherits the top-level
 	// default, or the auto-derived address when neither is set.
 	InternalAddress string `yaml:"internal_address" json:"internal_address"`
+	// InternalIface is the network interface whose first usable IPv4 address
+	// this mapping forwards to. It overrides the top-level default and is
+	// mutually exclusive with internal_address on the same mapping.
+	InternalIface string `yaml:"internal_iface" json:"internal_iface"`
 	// ExternalPort is the requested WAN-side port. Zero lets the gateway choose.
 	ExternalPort uint16 `yaml:"external_port" json:"external_port"`
 	// Description is a human-readable label.
@@ -93,7 +102,7 @@ func (m Mapping) protocols() []mapping.Protocol {
 // requests, resolving the internal address against the given default. A "both"
 // mapping yields separate TCP and UDP requests.
 func (m Mapping) Requests(defaultAddr netip.Addr) []mapping.Request {
-	addr := m.internalAddress(defaultAddr)
+	addr, _ := m.internalAddress(defaultAddr)
 	protocols := m.protocols()
 	requests := make([]mapping.Request, 0, len(protocols))
 	for _, proto := range protocols {
@@ -110,25 +119,24 @@ func (m Mapping) Requests(defaultAddr netip.Addr) []mapping.Request {
 	return requests
 }
 
-// internalAddress resolves the mapping's internal address: its own
-// internal_address when set, otherwise the supplied default. An unparseable
-// value yields the zero address; Validate rejects such values before this runs.
-func (m Mapping) internalAddress(defaultAddr netip.Addr) netip.Addr {
-	if m.InternalAddress == "" {
-		return defaultAddr
-	}
-	addr, err := netip.ParseAddr(m.InternalAddress)
+// internalAddress resolves the mapping's effective internal address: its own
+// internal_address or internal_iface when set, otherwise the supplied default.
+func (m Mapping) internalAddress(defaultAddr netip.Addr) (netip.Addr, error) {
+	addr, set, err := resolveInternalAddress(m.InternalAddress, m.InternalIface)
 	if err != nil {
-		return netip.Addr{}
+		return netip.Addr{}, err
 	}
-	return addr
+	if set {
+		return addr, nil
+	}
+	return defaultAddr, nil
 }
 
 // Requests expands every configured mapping into protocol-agnostic domain
 // requests, resolving each mapping's internal address against the top-level
 // default.
 func (c Config) Requests() []mapping.Request {
-	defaultAddr := parseAddr(c.InternalAddress)
+	defaultAddr, _ := c.defaultInternalAddress()
 	reqs := make([]mapping.Request, 0, len(c.Mappings))
 	for _, m := range c.Mappings {
 		reqs = append(reqs, m.Requests(defaultAddr)...)
@@ -136,17 +144,35 @@ func (c Config) Requests() []mapping.Request {
 	return reqs
 }
 
-// parseAddr parses an address string, returning the zero address for an empty
-// or unparseable value. Validate rejects unparseable values at startup.
-func parseAddr(s string) netip.Addr {
-	if s == "" {
-		return netip.Addr{}
+// defaultInternalAddress resolves the top-level effective internal address from
+// internal_address or internal_iface. It is the zero address when neither is
+// set.
+func (c Config) defaultInternalAddress() (netip.Addr, error) {
+	addr, _, err := resolveInternalAddress(c.InternalAddress, c.InternalIface)
+	return addr, err
+}
+
+// resolveInternalAddress resolves an (address, iface) pair to a single address.
+// It reports whether either source was set. An address string is parsed
+// directly; an iface name resolves to its first usable IPv4 address. Callers
+// must reject the case where both are set; this function prefers the address if
+// that ever occurs.
+func resolveInternalAddress(address, iface string) (addr netip.Addr, set bool, err error) {
+	if address != "" {
+		parsed, perr := netip.ParseAddr(address)
+		if perr != nil {
+			return netip.Addr{}, true, fmt.Errorf("config: invalid internal_address %q: %w", address, perr)
+		}
+		return parsed, true, nil
 	}
-	addr, err := netip.ParseAddr(s)
-	if err != nil {
-		return netip.Addr{}
+	if iface != "" {
+		resolved, rerr := resolveIface(iface)
+		if rerr != nil {
+			return netip.Addr{}, true, rerr
+		}
+		return resolved, true, nil
 	}
-	return addr
+	return netip.Addr{}, false, nil
 }
 
 // Load reads the configuration from the given YAML file, applying defaults and
@@ -170,9 +196,26 @@ func Load(filename string) (Config, error) {
 // tests can supply a fixed set instead of the machine's real interfaces.
 var localAddresses = defaultLocalAddresses
 
+// ifaceAddresses returns the addresses bound to the named interface. It is a
+// variable so tests can supply a fixed set instead of the real interface.
+var ifaceAddresses = defaultIfaceAddresses
+
 // defaultLocalAddresses returns the addresses bound to this host's interfaces.
 func defaultLocalAddresses() ([]netip.Addr, error) {
 	ifaceAddrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return nil, err
+	}
+	return parseInterfaceAddrs(ifaceAddrs), nil
+}
+
+// defaultIfaceAddresses returns the addresses bound to the named interface.
+func defaultIfaceAddresses(name string) ([]netip.Addr, error) {
+	iface, err := net.InterfaceByName(name)
+	if err != nil {
+		return nil, err
+	}
+	ifaceAddrs, err := iface.Addrs()
 	if err != nil {
 		return nil, err
 	}
@@ -193,6 +236,35 @@ func parseInterfaceAddrs(ifaceAddrs []net.Addr) []netip.Addr {
 	return addrs
 }
 
+// firstUsableIPv4 returns the first IPv4 address in addrs that is not a
+// loopback or link-local address, which are unusable as a forwarding target.
+func firstUsableIPv4(addrs []netip.Addr) (netip.Addr, bool) {
+	for _, a := range addrs {
+		a = a.Unmap()
+		if !a.Is4() {
+			continue
+		}
+		if a.IsLoopback() || a.IsLinkLocalUnicast() {
+			continue
+		}
+		return a, true
+	}
+	return netip.Addr{}, false
+}
+
+// resolveIface resolves the named interface to its first usable IPv4 address.
+func resolveIface(name string) (netip.Addr, error) {
+	addrs, err := ifaceAddresses(name)
+	if err != nil {
+		return netip.Addr{}, fmt.Errorf("config: interface %q: %w", name, err)
+	}
+	addr, ok := firstUsableIPv4(addrs)
+	if !ok {
+		return netip.Addr{}, fmt.Errorf("config: interface %q has no usable IPv4 address", name)
+	}
+	return addr, nil
+}
+
 // Validate reports whether the configuration is well formed. It rejects empty
 // mapping lists, invalid protocols, invalid detection settings, zero internal
 // ports, negative leases, internal addresses that are unparseable or not bound
@@ -210,11 +282,11 @@ func (c Config) Validate() error {
 	if err := validateDetect(c.Detect); err != nil {
 		return err
 	}
-	if err := c.validateInternalAddresses(); err != nil {
+	defaultAddr, err := c.validateInternalAddresses()
+	if err != nil {
 		return err
 	}
 
-	defaultAddr := parseAddr(c.InternalAddress)
 	seenExternal := make(map[string]struct{}, len(c.Mappings))
 	seenInternal := make(map[string]struct{}, len(c.Mappings))
 	for i, m := range c.Mappings {
@@ -246,62 +318,58 @@ func (c Config) Validate() error {
 	return nil
 }
 
-// validateInternalAddresses checks that every configured internal address (the
-// top-level default and each per-mapping override) parses and is bound to a
-// local interface. Unset addresses are skipped. The local interface list is
-// read once and only when at least one address is configured.
-func (c Config) validateInternalAddresses() error {
-	configured := c.configuredAddresses()
-	if len(configured) == 0 {
-		return nil
+// validateInternalAddresses resolves and checks every configured internal
+// address source: the top-level default and each per-mapping override. Setting
+// both internal_address and internal_iface at the same level is rejected. Each
+// resolved address (from internal_address; iface-resolved addresses come from
+// an interface already) must be bound to a local interface. It returns the
+// resolved top-level default for reuse.
+func (c Config) validateInternalAddresses() (netip.Addr, error) {
+	if c.InternalAddress != "" && c.InternalIface != "" {
+		return netip.Addr{}, fmt.Errorf("config: internal_address and internal_iface are mutually exclusive")
+	}
+	defaultAddr, err := c.defaultInternalAddress()
+	if err != nil {
+		return netip.Addr{}, err
 	}
 
-	parsed := make([]netip.Addr, 0, len(configured))
-	for _, s := range configured {
-		addr, err := netip.ParseAddr(s)
-		if err != nil {
-			return fmt.Errorf("config: invalid internal_address %q: %w", s, err)
+	resolved := make([]netip.Addr, 0, len(c.Mappings)+1)
+	if c.InternalAddress != "" {
+		resolved = append(resolved, defaultAddr)
+	}
+	for i, m := range c.Mappings {
+		if m.InternalAddress != "" && m.InternalIface != "" {
+			return netip.Addr{}, fmt.Errorf("config: mapping %d: internal_address and internal_iface are mutually exclusive", i)
 		}
-		parsed = append(parsed, addr)
+		addr, err := m.internalAddress(defaultAddr)
+		if err != nil {
+			return netip.Addr{}, fmt.Errorf("config: mapping %d: %w", i, err)
+		}
+		// Only an explicit per-mapping internal_address needs the local-binding
+		// check; iface-resolved addresses are local by construction, and an
+		// inherited default is checked at its own level.
+		if m.InternalAddress != "" && addr.IsValid() {
+			resolved = append(resolved, addr)
+		}
+	}
+	if len(resolved) == 0 {
+		return defaultAddr, nil
 	}
 
 	local, err := localAddresses()
 	if err != nil {
-		return fmt.Errorf("config: list local interface addresses: %w", err)
+		return netip.Addr{}, fmt.Errorf("config: list local interface addresses: %w", err)
 	}
 	localSet := make(map[netip.Addr]struct{}, len(local))
 	for _, a := range local {
 		localSet[a] = struct{}{}
 	}
-
-	for _, addr := range parsed {
+	for _, addr := range resolved {
 		if _, ok := localSet[addr]; !ok {
-			return fmt.Errorf("config: internal_address %s is not bound to any local interface", addr)
+			return netip.Addr{}, fmt.Errorf("config: internal_address %s is not bound to any local interface", addr)
 		}
 	}
-	return nil
-}
-
-// configuredAddresses returns the distinct, non-empty internal address strings
-// declared anywhere in the configuration.
-func (c Config) configuredAddresses() []string {
-	seen := make(map[string]struct{})
-	var addrs []string
-	add := func(s string) {
-		if s == "" {
-			return
-		}
-		if _, ok := seen[s]; ok {
-			return
-		}
-		seen[s] = struct{}{}
-		addrs = append(addrs, s)
-	}
-	add(c.InternalAddress)
-	for _, m := range c.Mappings {
-		add(m.InternalAddress)
-	}
-	return addrs
+	return defaultAddr, nil
 }
 
 func validateLogLevel(level string) error {

@@ -290,6 +290,119 @@ func TestValidateInternalAddress(t *testing.T) {
 		cfg := Config{InternalAddress: "192.168.1.50", Mappings: []Mapping{{Protocol: "tcp", InternalPort: 80}}}
 		require.Error(t, cfg.Validate())
 	})
+
+	t.Run("address and iface both set at top level rejected", func(t *testing.T) {
+		cfg := Config{InternalAddress: "192.168.1.50", InternalIface: "eth0", Mappings: []Mapping{{Protocol: "tcp", InternalPort: 80}}}
+		require.Error(t, cfg.Validate())
+	})
+
+	t.Run("address and iface both set on mapping rejected", func(t *testing.T) {
+		cfg := Config{Mappings: []Mapping{{Protocol: "tcp", InternalPort: 80, InternalAddress: "10.0.0.5", InternalIface: "eth0"}}}
+		require.Error(t, cfg.Validate())
+	})
+}
+
+func TestValidateInternalIface(t *testing.T) {
+	origLocal, origIface := localAddresses, ifaceAddresses
+	t.Cleanup(func() { localAddresses, ifaceAddresses = origLocal, origIface })
+
+	local := netip.MustParseAddr("192.168.1.50")
+	localAddresses = func() ([]netip.Addr, error) {
+		return []netip.Addr{local, netip.MustParseAddr("10.0.0.5")}, nil
+	}
+	ifaceAddresses = func(name string) ([]netip.Addr, error) {
+		switch name {
+		case "eth0":
+			return []netip.Addr{
+				netip.MustParseAddr("127.0.0.1"),    // loopback, skipped
+				netip.MustParseAddr("169.254.1.1"),  // link-local, skipped
+				netip.MustParseAddr("192.168.1.50"), // first usable
+			}, nil
+		case "empty0":
+			return []netip.Addr{netip.MustParseAddr("127.0.0.1")}, nil
+		default:
+			return nil, assert.AnError
+		}
+	}
+
+	t.Run("top-level iface resolves to first usable IPv4", func(t *testing.T) {
+		cfg := Config{InternalIface: "eth0", Mappings: []Mapping{{Protocol: "tcp", InternalPort: 80}}}
+		require.NoError(t, cfg.Validate())
+		reqs := cfg.Requests()
+		require.Len(t, reqs, 1)
+		assert.Equal(t, local, reqs[0].InternalAddress)
+	})
+
+	t.Run("mapping iface overrides top-level default", func(t *testing.T) {
+		cfg := Config{
+			InternalAddress: "10.0.0.5",
+			Mappings:        []Mapping{{Protocol: "tcp", InternalPort: 80, InternalIface: "eth0"}},
+		}
+		require.NoError(t, cfg.Validate())
+		reqs := cfg.Requests()
+		require.Len(t, reqs, 1)
+		assert.Equal(t, local, reqs[0].InternalAddress)
+	})
+
+	t.Run("iface without usable IPv4 rejected", func(t *testing.T) {
+		cfg := Config{InternalIface: "empty0", Mappings: []Mapping{{Protocol: "tcp", InternalPort: 80}}}
+		require.Error(t, cfg.Validate())
+	})
+
+	t.Run("unknown iface rejected", func(t *testing.T) {
+		cfg := Config{Mappings: []Mapping{{Protocol: "tcp", InternalPort: 80, InternalIface: "wlan9"}}}
+		require.Error(t, cfg.Validate())
+	})
+}
+
+func TestFirstUsableIPv4(t *testing.T) {
+	t.Run("skips loopback and link-local", func(t *testing.T) {
+		addr, ok := firstUsableIPv4([]netip.Addr{
+			netip.MustParseAddr("127.0.0.1"),
+			netip.MustParseAddr("169.254.0.7"),
+			netip.MustParseAddr("192.168.1.50"),
+		})
+		require.True(t, ok)
+		assert.Equal(t, netip.MustParseAddr("192.168.1.50"), addr)
+	})
+
+	t.Run("skips ipv6", func(t *testing.T) {
+		addr, ok := firstUsableIPv4([]netip.Addr{
+			netip.MustParseAddr("2001:db8::1"),
+			netip.MustParseAddr("10.0.0.2"),
+		})
+		require.True(t, ok)
+		assert.Equal(t, netip.MustParseAddr("10.0.0.2"), addr)
+	})
+
+	t.Run("none usable", func(t *testing.T) {
+		_, ok := firstUsableIPv4([]netip.Addr{netip.MustParseAddr("127.0.0.1")})
+		assert.False(t, ok)
+	})
+
+	t.Run("empty", func(t *testing.T) {
+		_, ok := firstUsableIPv4(nil)
+		assert.False(t, ok)
+	})
+}
+
+func TestDefaultIfaceAddresses(t *testing.T) {
+	t.Run("unknown interface errors", func(t *testing.T) {
+		_, err := defaultIfaceAddresses("definitely-not-an-iface-xyz")
+		require.Error(t, err)
+	})
+
+	t.Run("real interface resolves", func(t *testing.T) {
+		// Use whatever the host's first interface is named; every host has one.
+		ifaces, err := net.Interfaces()
+		require.NoError(t, err)
+		require.NotEmpty(t, ifaces)
+		addrs, err := defaultIfaceAddresses(ifaces[0].Name)
+		require.NoError(t, err)
+		// The address slice may be empty for an interface with no IPs; the call
+		// itself must succeed.
+		assert.NotNil(t, addrs)
+	})
 }
 
 func TestMappingRequests(t *testing.T) {
@@ -382,25 +495,6 @@ func TestConfigRequestsUnparseableDefault(t *testing.T) {
 	reqs := cfg.Requests()
 	require.Len(t, reqs, 1)
 	assert.False(t, reqs[0].InternalAddress.IsValid())
-}
-
-func TestConfiguredAddresses(t *testing.T) {
-	t.Run("deduplicates repeated addresses", func(t *testing.T) {
-		cfg := Config{
-			InternalAddress: "10.0.0.1",
-			Mappings: []Mapping{
-				{Protocol: "tcp", InternalPort: 80, InternalAddress: "10.0.0.1"},
-				{Protocol: "tcp", InternalPort: 81, InternalAddress: "10.0.0.2"},
-				{Protocol: "tcp", InternalPort: 82},
-			},
-		}
-		assert.Equal(t, []string{"10.0.0.1", "10.0.0.2"}, cfg.configuredAddresses())
-	})
-
-	t.Run("empty when none configured", func(t *testing.T) {
-		cfg := Config{Mappings: []Mapping{{Protocol: "tcp", InternalPort: 80}}}
-		assert.Empty(t, cfg.configuredAddresses())
-	})
 }
 
 func TestDefaultLocalAddresses(t *testing.T) {

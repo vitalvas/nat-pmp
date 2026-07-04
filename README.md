@@ -52,6 +52,8 @@ log_level: info          # debug | info | warn | error (default: info)
 
 internal_address: 192.168.1.50  # default LAN address mappings forward to
                                 # (omit to auto-derive from the route)
+# internal_iface: eth0          # alternative: use the interface's first usable
+                                # IPv4 (mutually exclusive with internal_address)
 
 detect:
   order: [natpmp, pcp, upnp]  # optional probe order override
@@ -64,6 +66,7 @@ mappings:
     description: syncthing
     lease: 1h            # requested lifetime (default: 1h)
     internal_address: 192.168.2.10  # override the default for this mapping
+    # internal_iface: eth1          # or point at an interface instead
 
   - protocol: udp
     internal_port: 51820
@@ -99,11 +102,13 @@ the underlying protocols map one transport per request.
 | ------------------------ | -------- | ------- | ------------------------------------------------------------------ |
 | `log_level`              | string   | `info`  | Log verbosity: `debug`, `info`, `warn`, or `error`.                |
 | `internal_address`       | string   | (auto)  | Default LAN address mappings forward to. Empty auto-derives it from the route to the gateway. Must be bound to a local interface. |
+| `internal_iface`         | string   | (unset) | Default interface whose first usable IPv4 mappings forward to. Mutually exclusive with `internal_address`. |
 | `detect.order`           | list     | (auto)  | Protocol probe order. Valid: `natpmp`, `pcp`, `upnp`.              |
 | `detect.timeout`         | duration | `3s`    | Time budget for each protocol probe during detection.              |
 | `mappings[].protocol`    | string   | —       | Transport protocol: `tcp`, `udp`, or `both` (forwards over TCP and UDP). |
 | `mappings[].internal_port` | uint16 | —       | Local port that traffic is forwarded to. Must be non-zero.         |
-| `mappings[].internal_address` | string | (default) | LAN address this mapping forwards to. Overrides the top-level `internal_address`. Must be bound to a local interface. |
+| `mappings[].internal_address` | string | (default) | LAN address this mapping forwards to. Overrides the top-level default. Must be bound to a local interface. |
+| `mappings[].internal_iface` | string | (default) | Interface whose first usable IPv4 this mapping forwards to. Overrides the top-level default. Mutually exclusive with `mappings[].internal_address`. |
 | `mappings[].external_port` | uint16 | `0`     | Requested WAN-side port. `0` lets the router choose a port.        |
 | `mappings[].description` | string   | `""`    | Human-readable label for the mapping.                              |
 | `mappings[].lease`       | duration | `1h`    | Requested mapping lifetime.                                        |
@@ -119,7 +124,9 @@ For example, `NATPMP_LOG_LEVEL=debug` overrides `log_level`.
 The configuration is rejected at startup if it declares no mappings, uses a
 protocol other than `tcp`/`udp`/`both`, uses an invalid detection protocol or log
 level, has a zero internal port, sets an internal address that does not parse or
-is not bound to any local interface, has a negative lease, defines two mappings
+is not bound to any local interface, sets an internal interface that does not
+exist or has no usable IPv4 address, sets both `internal_address` and
+`internal_iface` at the same level, has a negative lease, defines two mappings
 with the same protocol and internal port, or defines two mappings with the same
 protocol and non-zero external port. Leases must be whole-second durations no
 larger than the protocol maximum. A `both` mapping is checked against both its
@@ -175,7 +182,13 @@ the default for every mapping, and overridden per mapping. When it is omitted,
 the daemon derives the address from the route to the gateway, preserving the
 previous behavior.
 
-The address is honored across all three protocols, though the mechanism differs:
+Instead of a literal address, `internal_iface` names an interface and the daemon
+uses its first usable IPv4 address (skipping loopback and link-local addresses).
+It follows the same top-level-default-plus-per-mapping-override rules as
+`internal_address`, and the two are mutually exclusive at the same level.
+
+The resolved address is honored across all three protocols, though the mechanism
+differs:
 
 - **UPnP IGD** sends the address explicitly as `NewInternalClient`.
 - **NAT-PMP** and **PCP** bind the request socket to the address, so the gateway

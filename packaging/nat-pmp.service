@@ -1,0 +1,19 @@
+[Unit]
+Description=nat-pmp automatic router port forwarding
+Documentation=https://github.com/vitalvas/nat-pmp
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/nat-pmp/config.yaml
+
+[Service]
+Type=simple
+User=nobody
+Group=nogroup
+ExecStart=/usr/bin/nat-pmp --config /etc/nat-pmp/config.yaml
+Restart=on-failure
+RestartSec=5s
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

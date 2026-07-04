@@ -41,8 +41,9 @@ func TestNewLogger(t *testing.T) {
 }
 
 func TestNewRootCommand(t *testing.T) {
-	cmd := newRootCommand()
+	cmd := newRootCommand("1.2.3")
 	assert.Equal(t, "nat-pmp", cmd.Use)
+	assert.Equal(t, "1.2.3", cmd.Version)
 	assert.NotNil(t, cmd.Args)
 	flag := cmd.Flags().Lookup("config")
 	require.NotNil(t, flag)
@@ -73,14 +74,14 @@ func TestRunGatewayFailureSurfaces(t *testing.T) {
 
 func TestExecuteReturnsErrorCode(t *testing.T) {
 	t.Run("command error surfaces", func(t *testing.T) {
-		cmd := newRootCommand()
+		cmd := newRootCommand("1.2.3")
 		cmd.SetArgs([]string{"--config", filepath.Join(t.TempDir(), "absent.yaml")})
 		err := cmd.ExecuteContext(context.Background())
 		require.Error(t, err)
 	})
 
 	t.Run("extra positional args rejected", func(t *testing.T) {
-		cmd := newRootCommand()
+		cmd := newRootCommand("1.2.3")
 		cmd.SetArgs([]string{"unexpected"})
 		err := cmd.ExecuteContext(context.Background())
 		require.Error(t, err)
@@ -90,7 +91,7 @@ func TestExecuteReturnsErrorCode(t *testing.T) {
 		// With no config.yaml in the working directory, config load fails and
 		// Execute reports a non-zero exit code.
 		t.Chdir(t.TempDir())
-		code := Execute(context.Background())
+		code := Execute(context.Background(), "1.2.3")
 		assert.Equal(t, 1, code)
 	})
 }

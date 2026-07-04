@@ -19,8 +19,8 @@ import (
 )
 
 // Execute runs the root command and returns a process exit code.
-func Execute(ctx context.Context) int {
-	return executeCommand(ctx, newRootCommand())
+func Execute(ctx context.Context, version string) int {
+	return executeCommand(ctx, newRootCommand(version))
 }
 
 func executeCommand(ctx context.Context, cmd *cobra.Command) int {
@@ -32,12 +32,13 @@ func executeCommand(ctx context.Context, cmd *cobra.Command) int {
 }
 
 // newRootCommand builds the root command that runs the daemon.
-func newRootCommand() *cobra.Command {
+func newRootCommand(version string) *cobra.Command {
 	var configPath string
 
 	cmd := &cobra.Command{
 		Use:           "nat-pmp",
 		Short:         "Maintain router port forwardings via UPnP, NAT-PMP, or PCP",
+		Version:       version,
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,

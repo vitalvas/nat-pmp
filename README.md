@@ -50,6 +50,9 @@ several ports, list several mappings.
 ```yaml
 log_level: info          # debug | info | warn | error (default: info)
 
+internal_address: 192.168.1.50  # default LAN address mappings forward to
+                                # (omit to auto-derive from the route)
+
 detect:
   order: [natpmp, pcp, upnp]  # optional probe order override
   timeout: 3s                 # per-protocol detection timeout (default: 3s)
@@ -60,6 +63,7 @@ mappings:
     external_port: 22000 # WAN-side port; omit or 0 to let the router choose
     description: syncthing
     lease: 1h            # requested lifetime (default: 1h)
+    internal_address: 192.168.2.10  # override the default for this mapping
 
   - protocol: udp
     internal_port: 51820
@@ -94,10 +98,12 @@ the underlying protocols map one transport per request.
 | Field                    | Type     | Default | Description                                                        |
 | ------------------------ | -------- | ------- | ------------------------------------------------------------------ |
 | `log_level`              | string   | `info`  | Log verbosity: `debug`, `info`, `warn`, or `error`.                |
+| `internal_address`       | string   | (auto)  | Default LAN address mappings forward to. Empty auto-derives it from the route to the gateway. Must be bound to a local interface. |
 | `detect.order`           | list     | (auto)  | Protocol probe order. Valid: `natpmp`, `pcp`, `upnp`.              |
 | `detect.timeout`         | duration | `3s`    | Time budget for each protocol probe during detection.              |
 | `mappings[].protocol`    | string   | —       | Transport protocol: `tcp`, `udp`, or `both` (forwards over TCP and UDP). |
 | `mappings[].internal_port` | uint16 | —       | Local port that traffic is forwarded to. Must be non-zero.         |
+| `mappings[].internal_address` | string | (default) | LAN address this mapping forwards to. Overrides the top-level `internal_address`. Must be bound to a local interface. |
 | `mappings[].external_port` | uint16 | `0`     | Requested WAN-side port. `0` lets the router choose a port.        |
 | `mappings[].description` | string   | `""`    | Human-readable label for the mapping.                              |
 | `mappings[].lease`       | duration | `1h`    | Requested mapping lifetime.                                        |
@@ -112,8 +118,9 @@ For example, `NATPMP_LOG_LEVEL=debug` overrides `log_level`.
 
 The configuration is rejected at startup if it declares no mappings, uses a
 protocol other than `tcp`/`udp`/`both`, uses an invalid detection protocol or log
-level, has a zero internal port, has a negative lease, defines two mappings with
-the same protocol and internal port, or defines two mappings with the same
+level, has a zero internal port, sets an internal address that does not parse or
+is not bound to any local interface, has a negative lease, defines two mappings
+with the same protocol and internal port, or defines two mappings with the same
 protocol and non-zero external port. Leases must be whole-second durations no
 larger than the protocol maximum. A `both` mapping is checked against both its
 TCP and UDP forms.
@@ -159,6 +166,24 @@ once a listener appears. If the listener later disappears, the mapping is
 released. When the listener check itself fails (for example, a `/proc` read
 error), the daemon conservatively assumes a listener is present so a transient
 failure does not tear down a working forwarding.
+
+### Multi-homed hosts
+
+On a host with several IP addresses or interfaces, `internal_address` selects
+which LAN address a forwarding targets. It can be set once at the top level as
+the default for every mapping, and overridden per mapping. When it is omitted,
+the daemon derives the address from the route to the gateway, preserving the
+previous behavior.
+
+The address is honored across all three protocols, though the mechanism differs:
+
+- **UPnP IGD** sends the address explicitly as `NewInternalClient`.
+- **NAT-PMP** and **PCP** bind the request socket to the address, so the gateway
+  maps to that source IP; PCP also carries it as the client address in the
+  request header.
+
+The address must be bound to one of the host's interfaces, which is verified at
+startup.
 
 ## Protocols
 

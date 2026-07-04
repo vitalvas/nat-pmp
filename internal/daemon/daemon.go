@@ -143,11 +143,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 // requests expands the configured mappings into individual protocol-agnostic
 // requests. A "both" mapping expands into separate TCP and UDP requests.
 func (d *Daemon) requests() []mapping.Request {
-	var reqs []mapping.Request
-	for _, m := range d.cfg.Mappings {
-		reqs = append(reqs, m.Requests()...)
-	}
-	return reqs
+	return d.cfg.Requests()
 }
 
 // reconcileAll creates or refreshes every configured mapping, recording leases

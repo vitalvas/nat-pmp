@@ -38,8 +38,11 @@ type packetConn interface {
 	Close() error
 }
 
-// dialFunc opens a packetConn bound for communicating with the gateway.
-type dialFunc func() (packetConn, error)
+// dialFunc opens a packetConn bound for communicating with the gateway. When
+// bindAddr is valid the socket is bound to that local source address, which
+// selects the interface the mapping targets on multi-homed hosts; an invalid
+// bindAddr lets the OS pick the source address via the route to the gateway.
+type dialFunc func(bindAddr netip.Addr) (packetConn, error)
 
 // Client speaks NAT-PMP to a single gateway.
 type Client struct {
@@ -54,7 +57,7 @@ type Client struct {
 type Option func(*Client)
 
 // WithDial overrides the transport dial function. Used in tests.
-func WithDial(d func() (packetConn, error)) Option {
+func WithDial(d func(bindAddr netip.Addr) (packetConn, error)) Option {
 	return func(c *Client) { c.dial = dialFunc(d) }
 }
 
@@ -89,8 +92,12 @@ func New(gateway netip.Addr, opts ...Option) *Client {
 // Name identifies the protocol.
 func (c *Client) Name() string { return ProtocolName }
 
-func (c *Client) defaultDial() (packetConn, error) {
-	conn, err := net.ListenUDP("udp4", nil)
+func (c *Client) defaultDial(bindAddr netip.Addr) (packetConn, error) {
+	var laddr *net.UDPAddr
+	if bindAddr.IsValid() {
+		laddr = net.UDPAddrFromAddrPort(netip.AddrPortFrom(bindAddr, 0))
+	}
+	conn, err := net.ListenUDP("udp4", laddr)
 	if err != nil {
 		return nil, err
 	}
@@ -104,8 +111,8 @@ func (c *Client) serverAddr() netip.AddrPort {
 // exchange sends the request and returns the first response of the expected
 // length, retransmitting with exponential backoff until the context is done or
 // the attempt budget is exhausted.
-func (c *Client) exchange(ctx context.Context, req []byte, respLen int) ([]byte, error) {
-	conn, err := c.dial()
+func (c *Client) exchange(ctx context.Context, bindAddr netip.Addr, req []byte, respLen int) ([]byte, error) {
+	conn, err := c.dial(bindAddr)
 	if err != nil {
 		return nil, fmt.Errorf("natpmp: dial: %w", err)
 	}
@@ -177,7 +184,7 @@ func isTimeout(err error) bool {
 
 // ExternalIP returns the gateway's WAN address.
 func (c *Client) ExternalIP(ctx context.Context) (netip.Addr, error) {
-	resp, err := c.exchange(ctx, encodeExternalAddressRequest(), 12)
+	resp, err := c.exchange(ctx, netip.Addr{}, encodeExternalAddressRequest(), 12)
 	if err != nil {
 		return netip.Addr{}, err
 	}
@@ -199,7 +206,7 @@ func (c *Client) Map(ctx context.Context, r mapping.Request) (mapping.Lease, err
 	}
 
 	req, _ := encodeMapRequest(r.Protocol, r.InternalPort, r.ExternalPort, uint32(lifetime/time.Second))
-	resp, err := c.exchange(ctx, req, 16)
+	resp, err := c.exchange(ctx, r.InternalAddress, req, 16)
 	if err != nil {
 		return mapping.Lease{}, err
 	}
@@ -240,7 +247,7 @@ func (c *Client) Unmap(ctx context.Context, r mapping.Request) error {
 	}
 
 	req, _ := encodeMapRequest(r.Protocol, r.InternalPort, 0, 0)
-	resp, err := c.exchange(ctx, req, 16)
+	resp, err := c.exchange(ctx, r.InternalAddress, req, 16)
 	if err != nil {
 		return err
 	}

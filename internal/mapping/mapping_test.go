@@ -103,6 +103,15 @@ func TestRequestValidate(t *testing.T) {
 			req:     Request{Protocol: TCP, InternalPort: 22000, Lease: MaxLease + time.Second},
 			wantErr: true,
 		},
+		{
+			name: "valid internal address",
+			req:  Request{Protocol: TCP, InternalPort: 22000, InternalAddress: netip.MustParseAddr("192.168.1.50")},
+		},
+		{
+			name:    "unspecified internal address",
+			req:     Request{Protocol: TCP, InternalPort: 22000, InternalAddress: netip.IPv4Unspecified()},
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {

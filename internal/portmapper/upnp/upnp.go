@@ -187,6 +187,9 @@ func (c *Client) Map(ctx context.Context, r mapping.Request) (mapping.Lease, err
 		return mapping.Lease{}, err
 	}
 	internalClient := c.getInternalClient()
+	if r.InternalAddress.IsValid() {
+		internalClient = r.InternalAddress.String()
+	}
 	if internalClient == "" {
 		return mapping.Lease{}, fmt.Errorf("upnp: internal client address is required")
 	}

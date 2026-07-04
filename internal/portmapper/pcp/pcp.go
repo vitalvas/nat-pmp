@@ -40,8 +40,12 @@ type packetConn interface {
 }
 
 // dialFunc opens a packetConn and reports the local address the gateway will
-// see, which PCP requires as the client address in the request header.
-type dialFunc func() (conn packetConn, clientAddr netip.Addr, err error)
+// see, which PCP requires as the client address in the request header. When
+// bindAddr is valid the socket is bound to that local source address and it
+// becomes the reported client address, targeting a specific interface on
+// multi-homed hosts; an invalid bindAddr derives the address from the route to
+// the gateway.
+type dialFunc func(bindAddr netip.Addr) (conn packetConn, clientAddr netip.Addr, err error)
 
 // nonceFunc fills a fresh MAP nonce.
 type nonceFunc func() ([nonceLen]byte, error)
@@ -68,7 +72,7 @@ type nonceKey struct {
 type Option func(*Client)
 
 // WithDial overrides the transport dial function. Used in tests.
-func WithDial(d func() (packetConn, netip.Addr, error)) Option {
+func WithDial(d func(bindAddr netip.Addr) (packetConn, netip.Addr, error)) Option {
 	return func(c *Client) { c.dial = dialFunc(d) }
 }
 
@@ -121,10 +125,17 @@ func randomNonce() ([nonceLen]byte, error) {
 // defaultDial opens an unconnected UDP socket for talking to the gateway and
 // reports the local address the gateway will see. A *net.UDPConn satisfies the
 // packetConn interface directly, so no adapter is needed.
-func (c *Client) defaultDial() (packetConn, netip.Addr, error) {
-	conn, err := net.ListenUDP("udp4", nil)
+func (c *Client) defaultDial(bindAddr netip.Addr) (packetConn, netip.Addr, error) {
+	var laddr *net.UDPAddr
+	if bindAddr.IsValid() {
+		laddr = net.UDPAddrFromAddrPort(netip.AddrPortFrom(bindAddr, 0))
+	}
+	conn, err := net.ListenUDP("udp4", laddr)
 	if err != nil {
 		return nil, netip.Addr{}, err
+	}
+	if bindAddr.IsValid() {
+		return conn, bindAddr, nil
 	}
 	local, err := c.localAddr()
 	if err != nil {
@@ -253,7 +264,7 @@ func isTimeout(err error) bool {
 // external address the gateway reports. PCP has no dedicated "get external
 // address" opcode, so a MAP with a zero internal port serves as the probe.
 func (c *Client) ExternalIP(ctx context.Context) (netip.Addr, error) {
-	conn, clientAddr, err := c.dial()
+	conn, clientAddr, err := c.dial(netip.Addr{})
 	if err != nil {
 		return netip.Addr{}, fmt.Errorf("pcp: dial: %w", err)
 	}
@@ -305,7 +316,7 @@ func (c *Client) Map(ctx context.Context, r mapping.Request) (mapping.Lease, err
 		lifetime = defaultLease
 	}
 
-	conn, clientAddr, err := c.dial()
+	conn, clientAddr, err := c.dial(r.InternalAddress)
 	if err != nil {
 		return mapping.Lease{}, fmt.Errorf("pcp: dial: %w", err)
 	}
@@ -369,7 +380,7 @@ func (c *Client) Unmap(ctx context.Context, r mapping.Request) error {
 		return err
 	}
 
-	conn, clientAddr, err := c.dial()
+	conn, clientAddr, err := c.dial(r.InternalAddress)
 	if err != nil {
 		return fmt.Errorf("pcp: dial: %w", err)
 	}

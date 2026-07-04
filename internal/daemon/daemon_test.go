@@ -285,6 +285,19 @@ func TestRenewDueSkipsUnscheduledMapping(t *testing.T) {
 	assert.Equal(t, 0, mapCalls)
 }
 
+func TestReleaseOneNoLeaseIsNoop(t *testing.T) {
+	client := newFakeClient()
+	cfg := testConfig(config.Mapping{Protocol: "tcp", InternalPort: 80})
+	d := newDaemon(t, cfg, client)
+	d.client = client
+
+	// No lease recorded for the key: releaseOne must return without unmapping.
+	d.releaseOne(keyOf(mapping.Request{Protocol: mapping.TCP, InternalPort: 80}), mapping.Request{Protocol: mapping.TCP, InternalPort: 80})
+
+	_, unmapCalls := client.counts()
+	assert.Equal(t, 0, unmapCalls)
+}
+
 func TestReconcileOneFailureSchedulesRetry(t *testing.T) {
 	client := newFakeClient()
 	client.mapErr = assert.AnError

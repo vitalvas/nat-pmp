@@ -160,6 +160,48 @@ func TestMap(t *testing.T) {
 		assert.Contains(t, gotBody, "<NewProtocol>UDP</NewProtocol>")
 	})
 
+	t.Run("request internal address overrides default", func(t *testing.T) {
+		var gotBody string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+			if strings.Contains(r.Header.Get("SOAPAction"), "AddPortMapping") {
+				gotBody = string(body)
+				_, _ = io.WriteString(w, addMappingResponse)
+				return
+			}
+			_, _ = io.WriteString(w, extIPResponse)
+		}))
+		defer srv.Close()
+
+		c := newClientWithServer(t, srv)
+		c.SetInternalClient(netip.MustParseAddr("192.168.1.50"))
+		_, err := c.Map(context.Background(), mapping.Request{
+			Protocol:        mapping.TCP,
+			InternalPort:    22000,
+			ExternalPort:    30000,
+			InternalAddress: netip.MustParseAddr("10.0.0.7"),
+		})
+		require.NoError(t, err)
+		assert.Contains(t, gotBody, "<NewInternalClient>10.0.0.7</NewInternalClient>")
+	})
+
+	t.Run("request internal address without default", func(t *testing.T) {
+		srv := soapRouter(t, map[string]string{
+			"AddPortMapping":       addMappingResponse,
+			"GetExternalIPAddress": extIPResponse,
+		})
+		defer srv.Close()
+
+		c := newClientWithServer(t, srv)
+		_, err := c.Map(context.Background(), mapping.Request{
+			Protocol:        mapping.TCP,
+			InternalPort:    22000,
+			ExternalPort:    30000,
+			InternalAddress: netip.MustParseAddr("10.0.0.7"),
+		})
+		require.NoError(t, err)
+	})
+
 	t.Run("internal client is required", func(t *testing.T) {
 		srv := soapRouter(t, map[string]string{
 			"AddPortMapping":       addMappingResponse,

@@ -104,7 +104,7 @@ func mapReply(op byte, internal, external uint16, lifetime uint32) []byte {
 func newTestClient(conn *fakeConn, opts ...Option) *Client {
 	base := make([]Option, 0, 3+len(opts))
 	base = append(base,
-		WithDial(func() (packetConn, error) { return conn, nil }),
+		WithDial(func(netip.Addr) (packetConn, error) { return conn, nil }),
 		WithClock(fixedClock()),
 		WithRetry(time.Millisecond, 4),
 	)
@@ -327,12 +327,65 @@ func TestUnmap(t *testing.T) {
 	})
 }
 
+func TestDefaultDial(t *testing.T) {
+	c := New(testGateway)
+
+	t.Run("without bind address", func(t *testing.T) {
+		conn, err := c.defaultDial(netip.Addr{})
+		require.NoError(t, err)
+		require.NoError(t, conn.Close())
+	})
+
+	t.Run("binds to loopback", func(t *testing.T) {
+		conn, err := c.defaultDial(netip.MustParseAddr("127.0.0.1"))
+		require.NoError(t, err)
+		require.NoError(t, conn.Close())
+	})
+
+	t.Run("bind to non-local address fails", func(t *testing.T) {
+		_, err := c.defaultDial(netip.MustParseAddr("203.0.113.99"))
+		require.Error(t, err)
+	})
+}
+
+func TestName(t *testing.T) {
+	assert.Equal(t, ProtocolName, New(testGateway).Name())
+}
+
 func TestDialError(t *testing.T) {
-	c := New(testGateway, WithDial(func() (packetConn, error) {
+	c := New(testGateway, WithDial(func(netip.Addr) (packetConn, error) {
 		return nil, assert.AnError
 	}))
 	_, err := c.ExternalIP(context.Background())
 	require.Error(t, err)
+}
+
+func TestMapBindsInternalAddress(t *testing.T) {
+	var binds []netip.Addr
+	conn := &fakeConn{replies: []reply{
+		{data: mapReply(opMapTCP, 22000, 33000, 3600)},
+		{data: extAddrReply([4]byte{203, 0, 113, 1})},
+	}}
+	c := New(testGateway,
+		WithDial(func(bindAddr netip.Addr) (packetConn, error) {
+			binds = append(binds, bindAddr)
+			return conn, nil
+		}),
+		WithClock(fixedClock()),
+		WithRetry(time.Millisecond, 4),
+	)
+
+	want := netip.MustParseAddr("192.168.1.50")
+	_, err := c.Map(context.Background(), mapping.Request{
+		Protocol:        mapping.TCP,
+		InternalPort:    22000,
+		InternalAddress: want,
+	})
+	require.NoError(t, err)
+	// The MAP exchange binds to the internal address; the follow-up ExternalIP
+	// probe binds to the auto-derived source (zero) address.
+	require.NotEmpty(t, binds)
+	assert.Equal(t, want, binds[0])
 }
 
 func TestExchangeErrorPaths(t *testing.T) {

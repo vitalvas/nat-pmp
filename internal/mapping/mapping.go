@@ -48,6 +48,11 @@ type Request struct {
 	Protocol Protocol
 	// InternalPort is the port on this host that traffic is forwarded to.
 	InternalPort uint16
+	// InternalAddress is the LAN address that traffic is forwarded to. An
+	// invalid (zero) value lets the daemon derive the address from the route to
+	// the gateway; a set value targets a specific local interface, which is
+	// useful on multi-homed hosts.
+	InternalAddress netip.Addr
 	// ExternalPort is the requested port on the gateway's WAN side. A value of
 	// zero asks the gateway to choose a port.
 	ExternalPort uint16
@@ -69,6 +74,9 @@ func (r Request) Validate() error {
 	}
 	if r.InternalPort == 0 {
 		return fmt.Errorf("internal port must be non-zero")
+	}
+	if r.InternalAddress.IsValid() && r.InternalAddress.IsUnspecified() {
+		return fmt.Errorf("internal address must not be unspecified")
 	}
 	if r.Lease < 0 {
 		return fmt.Errorf("lease must not be negative")

@@ -86,7 +86,7 @@ func fixedClock() func() time.Time {
 func newTestClient(conn *fakeConn, opts ...Option) *Client {
 	base := make([]Option, 0, 4+len(opts))
 	base = append(base,
-		WithDial(func() (packetConn, netip.Addr, error) { return conn, testClient, nil }),
+		WithDial(func(netip.Addr) (packetConn, netip.Addr, error) { return conn, testClient, nil }),
 		WithNonce(func() ([nonceLen]byte, error) { return testNonce, nil }),
 		WithClock(fixedClock()),
 		WithRetry(time.Millisecond, 4),
@@ -143,7 +143,7 @@ func TestExternalIP(t *testing.T) {
 	})
 
 	t.Run("dial error", func(t *testing.T) {
-		c := New(testGateway, WithDial(func() (packetConn, netip.Addr, error) {
+		c := New(testGateway, WithDial(func(netip.Addr) (packetConn, netip.Addr, error) {
 			return nil, netip.Addr{}, assert.AnError
 		}))
 		_, err := c.ExternalIP(context.Background())
@@ -162,7 +162,7 @@ func TestExternalIP(t *testing.T) {
 	t.Run("invalid client address", func(t *testing.T) {
 		conn := &fakeConn{}
 		c := New(testGateway,
-			WithDial(func() (packetConn, netip.Addr, error) { return conn, netip.Addr{}, nil }),
+			WithDial(func(netip.Addr) (packetConn, netip.Addr, error) { return conn, netip.Addr{}, nil }),
 			WithNonce(func() ([nonceLen]byte, error) { return testNonce, nil }),
 		)
 		_, err := c.ExternalIP(context.Background())
@@ -213,6 +213,34 @@ func TestMap(t *testing.T) {
 		require.NoError(t, err)
 		req := conn.writes[0]
 		assert.Equal(t, uint32(3600), beUint32(req[4:8]))
+	})
+
+	t.Run("binds to internal address as client address", func(t *testing.T) {
+		var gotBind netip.Addr
+		want := netip.MustParseAddr("192.168.1.50")
+		conn := &fakeConn{replies: []reply{{data: mapResp(netip.MustParseAddr("203.0.113.1"), 22000, 30000, 3600)}}}
+		c := New(testGateway,
+			WithDial(func(bindAddr netip.Addr) (packetConn, netip.Addr, error) {
+				gotBind = bindAddr
+				return conn, bindAddr, nil
+			}),
+			WithNonce(func() ([nonceLen]byte, error) { return testNonce, nil }),
+			WithClock(fixedClock()),
+			WithRetry(time.Millisecond, 4),
+		)
+		_, err := c.Map(context.Background(), mapping.Request{
+			Protocol:        mapping.TCP,
+			InternalPort:    22000,
+			ExternalPort:    30000,
+			InternalAddress: want,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, want, gotBind)
+		// The client address is the last 16 bytes of the 24-byte MAP request header.
+		req := conn.writes[0]
+		clientAddr, ok := netip.AddrFromSlice(req[8:24])
+		require.True(t, ok)
+		assert.Equal(t, want, clientAddr.Unmap())
 	})
 
 	t.Run("invalid request", func(t *testing.T) {
@@ -270,7 +298,7 @@ func TestMap(t *testing.T) {
 	})
 
 	t.Run("dial error", func(t *testing.T) {
-		c := New(testGateway, WithDial(func() (packetConn, netip.Addr, error) {
+		c := New(testGateway, WithDial(func(netip.Addr) (packetConn, netip.Addr, error) {
 			return nil, netip.Addr{}, assert.AnError
 		}))
 		_, err := c.Map(context.Background(), mapping.Request{Protocol: mapping.TCP, InternalPort: 22000})
@@ -288,7 +316,7 @@ func TestMap(t *testing.T) {
 	t.Run("invalid client address", func(t *testing.T) {
 		conn := &fakeConn{}
 		c := New(testGateway,
-			WithDial(func() (packetConn, netip.Addr, error) { return conn, netip.Addr{}, nil }),
+			WithDial(func(netip.Addr) (packetConn, netip.Addr, error) { return conn, netip.Addr{}, nil }),
 			WithNonce(func() ([nonceLen]byte, error) { return testNonce, nil }),
 		)
 		_, err := c.Map(context.Background(), mapping.Request{Protocol: mapping.TCP, InternalPort: 22000})
@@ -315,7 +343,7 @@ func TestUnmap(t *testing.T) {
 	})
 
 	t.Run("dial error", func(t *testing.T) {
-		c := New(testGateway, WithDial(func() (packetConn, netip.Addr, error) {
+		c := New(testGateway, WithDial(func(netip.Addr) (packetConn, netip.Addr, error) {
 			return nil, netip.Addr{}, assert.AnError
 		}))
 		err := c.Unmap(context.Background(), mapping.Request{Protocol: mapping.TCP, InternalPort: 22000})
@@ -340,7 +368,7 @@ func TestUnmap(t *testing.T) {
 	t.Run("invalid client address", func(t *testing.T) {
 		conn := &fakeConn{}
 		c := New(testGateway,
-			WithDial(func() (packetConn, netip.Addr, error) { return conn, netip.Addr{}, nil }),
+			WithDial(func(netip.Addr) (packetConn, netip.Addr, error) { return conn, netip.Addr{}, nil }),
 			WithNonce(func() ([nonceLen]byte, error) { return testNonce, nil }),
 		)
 		err := c.Unmap(context.Background(), mapping.Request{Protocol: mapping.TCP, InternalPort: 22000})
@@ -510,4 +538,32 @@ func TestRandomNonce(t *testing.T) {
 	b, err := randomNonce()
 	require.NoError(t, err)
 	assert.NotEqual(t, a, b, "nonces should differ")
+}
+
+func TestName(t *testing.T) {
+	assert.Equal(t, ProtocolName, New(testGateway).Name())
+}
+
+func TestDefaultDial(t *testing.T) {
+	c := New(testGateway)
+
+	t.Run("without bind address derives client address", func(t *testing.T) {
+		conn, clientAddr, err := c.defaultDial(netip.Addr{})
+		require.NoError(t, err)
+		defer conn.Close()
+		assert.True(t, clientAddr.IsValid())
+	})
+
+	t.Run("binds to loopback and reports it", func(t *testing.T) {
+		want := netip.MustParseAddr("127.0.0.1")
+		conn, clientAddr, err := c.defaultDial(want)
+		require.NoError(t, err)
+		defer conn.Close()
+		assert.Equal(t, want, clientAddr)
+	})
+
+	t.Run("bind to non-local address fails", func(t *testing.T) {
+		_, _, err := c.defaultDial(netip.MustParseAddr("203.0.113.99"))
+		require.Error(t, err)
+	})
 }

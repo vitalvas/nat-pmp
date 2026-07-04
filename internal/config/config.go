@@ -4,6 +4,8 @@ package config
 
 import (
 	"fmt"
+	"net"
+	"net/netip"
 	"os"
 	"strings"
 	"time"
@@ -36,6 +38,11 @@ const (
 type Config struct {
 	// LogLevel is the slog level: debug, info, warn, or error.
 	LogLevel string `yaml:"log_level" json:"log_level" default:"info"`
+	// InternalAddress is the default LAN address that mappings forward to. It
+	// applies to every mapping that does not set its own internal_address. An
+	// empty value lets the daemon derive the address from the route to the
+	// gateway.
+	InternalAddress string `yaml:"internal_address" json:"internal_address"`
 	// Mappings is the list of desired port forwardings.
 	Mappings []Mapping `yaml:"mappings" json:"mappings"`
 	// Detect configures protocol auto-detection.
@@ -57,6 +64,10 @@ type Mapping struct {
 	Protocol string `yaml:"protocol" json:"protocol"`
 	// InternalPort is the port on this host that traffic is forwarded to.
 	InternalPort uint16 `yaml:"internal_port" json:"internal_port"`
+	// InternalAddress is the LAN address this mapping forwards to. It overrides
+	// the top-level internal_address. An empty value inherits the top-level
+	// default, or the auto-derived address when neither is set.
+	InternalAddress string `yaml:"internal_address" json:"internal_address"`
 	// ExternalPort is the requested WAN-side port. Zero lets the gateway choose.
 	ExternalPort uint16 `yaml:"external_port" json:"external_port"`
 	// Description is a human-readable label.
@@ -79,14 +90,17 @@ func (m Mapping) protocols() []mapping.Protocol {
 }
 
 // Requests converts the config mapping into one or more protocol-agnostic domain
-// requests. A "both" mapping yields separate TCP and UDP requests.
-func (m Mapping) Requests() []mapping.Request {
+// requests, resolving the internal address against the given default. A "both"
+// mapping yields separate TCP and UDP requests.
+func (m Mapping) Requests(defaultAddr netip.Addr) []mapping.Request {
+	addr := m.internalAddress(defaultAddr)
 	protocols := m.protocols()
 	requests := make([]mapping.Request, 0, len(protocols))
 	for _, proto := range protocols {
 		requests = append(requests, mapping.Request{
 			Protocol:        proto,
 			InternalPort:    m.InternalPort,
+			InternalAddress: addr,
 			ExternalPort:    m.ExternalPort,
 			Description:     m.Description,
 			Lease:           m.Lease,
@@ -94,6 +108,45 @@ func (m Mapping) Requests() []mapping.Request {
 		})
 	}
 	return requests
+}
+
+// internalAddress resolves the mapping's internal address: its own
+// internal_address when set, otherwise the supplied default. An unparseable
+// value yields the zero address; Validate rejects such values before this runs.
+func (m Mapping) internalAddress(defaultAddr netip.Addr) netip.Addr {
+	if m.InternalAddress == "" {
+		return defaultAddr
+	}
+	addr, err := netip.ParseAddr(m.InternalAddress)
+	if err != nil {
+		return netip.Addr{}
+	}
+	return addr
+}
+
+// Requests expands every configured mapping into protocol-agnostic domain
+// requests, resolving each mapping's internal address against the top-level
+// default.
+func (c Config) Requests() []mapping.Request {
+	defaultAddr := parseAddr(c.InternalAddress)
+	reqs := make([]mapping.Request, 0, len(c.Mappings))
+	for _, m := range c.Mappings {
+		reqs = append(reqs, m.Requests(defaultAddr)...)
+	}
+	return reqs
+}
+
+// parseAddr parses an address string, returning the zero address for an empty
+// or unparseable value. Validate rejects unparseable values at startup.
+func parseAddr(s string) netip.Addr {
+	if s == "" {
+		return netip.Addr{}
+	}
+	addr, err := netip.ParseAddr(s)
+	if err != nil {
+		return netip.Addr{}
+	}
+	return addr
 }
 
 // Load reads the configuration from the given YAML file, applying defaults and
@@ -113,9 +166,37 @@ func Load(filename string) (Config, error) {
 	return cfg, nil
 }
 
+// localAddresses returns this host's interface addresses. It is a variable so
+// tests can supply a fixed set instead of the machine's real interfaces.
+var localAddresses = defaultLocalAddresses
+
+// defaultLocalAddresses returns the addresses bound to this host's interfaces.
+func defaultLocalAddresses() ([]netip.Addr, error) {
+	ifaceAddrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return nil, err
+	}
+	return parseInterfaceAddrs(ifaceAddrs), nil
+}
+
+// parseInterfaceAddrs extracts the IP from each interface address, skipping any
+// entry that does not parse as a CIDR prefix.
+func parseInterfaceAddrs(ifaceAddrs []net.Addr) []netip.Addr {
+	addrs := make([]netip.Addr, 0, len(ifaceAddrs))
+	for _, ia := range ifaceAddrs {
+		prefix, err := netip.ParsePrefix(ia.String())
+		if err != nil {
+			continue
+		}
+		addrs = append(addrs, prefix.Addr())
+	}
+	return addrs
+}
+
 // Validate reports whether the configuration is well formed. It rejects empty
 // mapping lists, invalid protocols, invalid detection settings, zero internal
-// ports, negative leases, duplicate (protocol, internal port) pairs, and
+// ports, negative leases, internal addresses that are unparseable or not bound
+// to a local interface, duplicate (protocol, internal port) pairs, and
 // duplicate non-zero (protocol, external port) pairs. A "both" mapping is
 // validated as its expanded TCP and UDP forms.
 func (c Config) Validate() error {
@@ -129,11 +210,15 @@ func (c Config) Validate() error {
 	if err := validateDetect(c.Detect); err != nil {
 		return err
 	}
+	if err := c.validateInternalAddresses(); err != nil {
+		return err
+	}
 
+	defaultAddr := parseAddr(c.InternalAddress)
 	seenExternal := make(map[string]struct{}, len(c.Mappings))
 	seenInternal := make(map[string]struct{}, len(c.Mappings))
 	for i, m := range c.Mappings {
-		requests := m.Requests()
+		requests := m.Requests(defaultAddr)
 		for _, req := range requests {
 			if err := req.Validate(); err != nil {
 				return fmt.Errorf("config: mapping %d: %w", i, err)
@@ -159,6 +244,64 @@ func (c Config) Validate() error {
 		}
 	}
 	return nil
+}
+
+// validateInternalAddresses checks that every configured internal address (the
+// top-level default and each per-mapping override) parses and is bound to a
+// local interface. Unset addresses are skipped. The local interface list is
+// read once and only when at least one address is configured.
+func (c Config) validateInternalAddresses() error {
+	configured := c.configuredAddresses()
+	if len(configured) == 0 {
+		return nil
+	}
+
+	parsed := make([]netip.Addr, 0, len(configured))
+	for _, s := range configured {
+		addr, err := netip.ParseAddr(s)
+		if err != nil {
+			return fmt.Errorf("config: invalid internal_address %q: %w", s, err)
+		}
+		parsed = append(parsed, addr)
+	}
+
+	local, err := localAddresses()
+	if err != nil {
+		return fmt.Errorf("config: list local interface addresses: %w", err)
+	}
+	localSet := make(map[netip.Addr]struct{}, len(local))
+	for _, a := range local {
+		localSet[a] = struct{}{}
+	}
+
+	for _, addr := range parsed {
+		if _, ok := localSet[addr]; !ok {
+			return fmt.Errorf("config: internal_address %s is not bound to any local interface", addr)
+		}
+	}
+	return nil
+}
+
+// configuredAddresses returns the distinct, non-empty internal address strings
+// declared anywhere in the configuration.
+func (c Config) configuredAddresses() []string {
+	seen := make(map[string]struct{})
+	var addrs []string
+	add := func(s string) {
+		if s == "" {
+			return
+		}
+		if _, ok := seen[s]; ok {
+			return
+		}
+		seen[s] = struct{}{}
+		addrs = append(addrs, s)
+	}
+	add(c.InternalAddress)
+	for _, m := range c.Mappings {
+		add(m.InternalAddress)
+	}
+	return addrs
 }
 
 func validateLogLevel(level string) error {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/netip"
 
 	"github.com/vitalvas/nat-pmp/internal/mapping"
 	"github.com/vitalvas/nat-pmp/internal/portmapper"
@@ -11,8 +12,9 @@ import (
 
 // ensure creates or refreshes a single mapping and returns the granted lease.
 // It logs the outcome, including when the gateway assigns a different external
-// port than requested.
-func ensure(ctx context.Context, client portmapper.Client, log *slog.Logger, req mapping.Request) (mapping.Lease, error) {
+// port than requested. internalAddr is the LAN address the mapping forwards to,
+// used only for logging; it may be invalid when it could not be determined.
+func ensure(ctx context.Context, client portmapper.Client, log *slog.Logger, req mapping.Request, internalAddr netip.Addr) (mapping.Lease, error) {
 	lease, err := client.Map(ctx, req)
 	if err != nil {
 		log.Warn("mapping failed",
@@ -41,13 +43,19 @@ func ensure(ctx context.Context, client portmapper.Client, log *slog.Logger, req
 		)
 	}
 
-	log.Info("mapping active",
+	attrs := []any{
 		"protocol", lease.Protocol,
+	}
+	if internalAddr.IsValid() {
+		attrs = append(attrs, "internal_address", internalAddr)
+	}
+	attrs = append(attrs,
 		"internal_port", lease.InternalPort,
 		"external_ip", lease.ExternalIP,
 		"external_port", lease.ExternalPort,
 		"lifetime", lease.Lifetime,
 	)
+	log.Info("mapping active", attrs...)
 	return lease, nil
 }
 

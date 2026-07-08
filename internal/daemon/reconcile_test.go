@@ -1,7 +1,10 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"net/netip"
 	"testing"
 	"time"
 
@@ -12,6 +15,8 @@ import (
 )
 
 func TestEnsure(t *testing.T) {
+	localAddr := netip.MustParseAddr("192.168.2.50")
+
 	t.Run("success returns lease", func(t *testing.T) {
 		client := newFakeClient()
 		lease, err := ensure(context.Background(), client, testLogger(), mapping.Request{
@@ -19,9 +24,35 @@ func TestEnsure(t *testing.T) {
 			InternalPort: 22000,
 			ExternalPort: 22000,
 			Lease:        time.Hour,
-		})
+		}, localAddr)
 		require.NoError(t, err)
 		assert.Equal(t, uint16(22000), lease.ExternalPort)
+	})
+
+	t.Run("logs internal address", func(t *testing.T) {
+		client := newFakeClient()
+		var buf bytes.Buffer
+		log := slog.New(slog.NewTextHandler(&buf, nil))
+		_, err := ensure(context.Background(), client, log, mapping.Request{
+			Protocol:     mapping.TCP,
+			InternalPort: 22000,
+			ExternalPort: 22000,
+		}, localAddr)
+		require.NoError(t, err)
+		assert.Contains(t, buf.String(), "internal_address=192.168.2.50")
+	})
+
+	t.Run("omits invalid internal address", func(t *testing.T) {
+		client := newFakeClient()
+		var buf bytes.Buffer
+		log := slog.New(slog.NewTextHandler(&buf, nil))
+		_, err := ensure(context.Background(), client, log, mapping.Request{
+			Protocol:     mapping.TCP,
+			InternalPort: 22000,
+			ExternalPort: 22000,
+		}, netip.Addr{})
+		require.NoError(t, err)
+		assert.NotContains(t, buf.String(), "internal_address")
 	})
 
 	t.Run("map error propagates", func(t *testing.T) {
@@ -30,7 +61,7 @@ func TestEnsure(t *testing.T) {
 		_, err := ensure(context.Background(), client, testLogger(), mapping.Request{
 			Protocol:     mapping.TCP,
 			InternalPort: 22000,
-		})
+		}, localAddr)
 		require.ErrorIs(t, err, assert.AnError)
 	})
 
@@ -41,7 +72,7 @@ func TestEnsure(t *testing.T) {
 			Protocol:     mapping.TCP,
 			InternalPort: 22000,
 			ExternalPort: 30000,
-		})
+		}, localAddr)
 		require.NoError(t, err)
 		assert.Equal(t, uint16(40000), lease.ExternalPort)
 	})
@@ -53,8 +84,26 @@ func TestEnsure(t *testing.T) {
 			Protocol:     mapping.TCP,
 			InternalPort: 22000,
 			ExternalPort: 22000,
-		})
+		}, localAddr)
 		require.Error(t, err)
+	})
+}
+
+func TestDaemonInternalAddr(t *testing.T) {
+	d := &Daemon{localAddr: netip.MustParseAddr("192.168.2.50")}
+
+	t.Run("falls back to derived local address", func(t *testing.T) {
+		got := d.internalAddr(mapping.Request{Protocol: mapping.TCP, InternalPort: 22000})
+		assert.Equal(t, netip.MustParseAddr("192.168.2.50"), got)
+	})
+
+	t.Run("prefers request address", func(t *testing.T) {
+		req := mapping.Request{
+			Protocol:        mapping.TCP,
+			InternalPort:    22000,
+			InternalAddress: netip.MustParseAddr("10.0.0.5"),
+		}
+		assert.Equal(t, netip.MustParseAddr("10.0.0.5"), d.internalAddr(req))
 	})
 }
 

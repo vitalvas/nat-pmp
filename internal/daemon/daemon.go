@@ -51,9 +51,10 @@ type Daemon struct {
 	newTimer func(d time.Duration) *time.Timer
 
 	// state, only touched by Run's single goroutine
-	client portmapper.Client
-	leases map[key]mapping.Lease
-	nextAt map[key]time.Time
+	client    portmapper.Client
+	localAddr netip.Addr
+	leases    map[key]mapping.Lease
+	nextAt    map[key]time.Time
 }
 
 // key uniquely identifies a configured mapping.
@@ -125,14 +126,16 @@ func (d *Daemon) Run(ctx context.Context) error {
 	d.client = client
 	d.log.Info("protocol detected", "protocol", client.Name())
 
-	// UPnP needs to advertise this host's LAN address; derive it from the route
-	// to the gateway.
+	// Derive this host's LAN address on the route to the gateway. It is logged
+	// as the internal address for mappings that do not target a specific address,
+	// and UPnP additionally advertises it in AddPortMapping calls.
+	if local, err := localAddrFor(gateway); err == nil {
+		d.localAddr = local
+	} else {
+		d.log.Warn("could not determine local address", "error", err)
+	}
 	if u, ok := client.(*upnp.Client); ok {
-		if local, err := localAddrFor(gateway); err == nil {
-			u.SetInternalClient(local)
-		} else {
-			d.log.Warn("could not determine local address for UPnP", "error", err)
-		}
+		u.SetInternalClient(d.localAddr)
 	}
 
 	d.reconcileAll(ctx)
@@ -162,7 +165,7 @@ func (d *Daemon) reconcileOne(ctx context.Context, req mapping.Request) {
 	}
 
 	mapReq := d.mapRequest(k, req)
-	lease, err := ensure(ctx, d.client, d.log, mapReq)
+	lease, err := ensure(ctx, d.client, d.log, mapReq, d.internalAddr(mapReq))
 	if err != nil {
 		d.nextAt[k] = d.now().Add(retryBackoff)
 		return
@@ -237,6 +240,16 @@ func (d *Daemon) mapRequest(k key, req mapping.Request) mapping.Request {
 	}
 	req.ExternalPort = lease.ExternalPort
 	return req
+}
+
+// internalAddr returns the LAN address a mapping forwards to, for logging. It is
+// the address explicitly targeted by the request, or the host's derived address
+// on the route to the gateway when the request does not target one.
+func (d *Daemon) internalAddr(req mapping.Request) netip.Addr {
+	if req.InternalAddress.IsValid() {
+		return req.InternalAddress
+	}
+	return d.localAddr
 }
 
 // renewLoop waits for the soonest scheduled renewal and refreshes due mappings,

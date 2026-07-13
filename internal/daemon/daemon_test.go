@@ -150,6 +150,52 @@ func TestRunUPnPClientLocalAddressBranches(t *testing.T) {
 	})
 }
 
+func TestRefreshLocalAddr(t *testing.T) {
+	t.Run("updates local address and upnp client on change", func(t *testing.T) {
+		client := upnp.New()
+		d := newDaemon(t, testConfig(config.Mapping{Protocol: "tcp", InternalPort: 22000}), client)
+		d.client = client
+		d.gatewayIP = netip.MustParseAddr("192.168.2.1")
+
+		addr := netip.MustParseAddr("192.168.2.132")
+		d.localAddr = func(netip.Addr) (netip.Addr, error) { return addr, nil }
+		d.refreshLocalAddr()
+		assert.Equal(t, addr, d.localIP)
+
+		// Primary IP changes; the daemon must pick up the new address.
+		next := netip.MustParseAddr("192.168.2.131")
+		d.localAddr = func(netip.Addr) (netip.Addr, error) { return next, nil }
+		d.refreshLocalAddr()
+		assert.Equal(t, next, d.localIP)
+	})
+
+	t.Run("discovery error keeps previous address", func(t *testing.T) {
+		d := newDaemon(t, testConfig(config.Mapping{Protocol: "tcp", InternalPort: 22000}), newFakeClient())
+		d.client = newFakeClient()
+		d.localIP = netip.MustParseAddr("192.168.2.132")
+		d.localAddr = func(netip.Addr) (netip.Addr, error) { return netip.Addr{}, assert.AnError }
+
+		d.refreshLocalAddr()
+		assert.Equal(t, netip.MustParseAddr("192.168.2.132"), d.localIP)
+	})
+}
+
+func TestRenewDueRefreshesLocalAddr(t *testing.T) {
+	client := newFakeClient()
+	cfg := testConfig(config.Mapping{Protocol: "tcp", InternalPort: 22000, ExternalPort: 22000})
+	now := time.Unix(1000, 0)
+	d := newDaemon(t, cfg, client, WithClock(func() time.Time { return now }))
+	d.client = client
+	d.localIP = netip.MustParseAddr("192.168.2.132")
+	d.nextAt[keyOf(mapping.Request{Protocol: mapping.TCP, InternalPort: 22000, ExternalPort: 22000})] = now
+
+	next := netip.MustParseAddr("192.168.2.131")
+	d.localAddr = func(netip.Addr) (netip.Addr, error) { return next, nil }
+	d.renewDue(context.Background())
+
+	assert.Equal(t, next, d.localIP)
+}
+
 func TestRunCreatesAndReleases(t *testing.T) {
 	client := newFakeClient()
 	cfg := testConfig(

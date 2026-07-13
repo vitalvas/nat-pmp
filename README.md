@@ -64,7 +64,7 @@ mappings:
     internal_port: 22000 # port on this host (required, non-zero)
     external_port: 22000 # WAN-side port; omit or 0 to let the router choose
     description: syncthing
-    lease: 1h            # requested lifetime (default: 1h)
+    lease: 30m           # requested lifetime (default: 30m)
     internal_address: 192.168.2.10  # override the default for this mapping
     # internal_iface: eth1          # or point at an interface instead
 
@@ -111,7 +111,7 @@ the underlying protocols map one transport per request.
 | `mappings[].internal_iface` | string | (default) | Interface whose first usable IPv4 this mapping forwards to. Overrides the top-level default. Mutually exclusive with `mappings[].internal_address`. |
 | `mappings[].external_port` | uint16 | `0`     | Requested WAN-side port. `0` lets the router choose a port.        |
 | `mappings[].description` | string   | `""`    | Human-readable label for the mapping.                              |
-| `mappings[].lease`       | duration | `1h`    | Requested mapping lifetime.                                        |
+| `mappings[].lease`       | duration | `30m`   | Requested mapping lifetime.                                        |
 | `mappings[].require_listener` | bool | `false` | Only open the mapping while a local listener is bound to the internal port; release it when the listener disappears. |
 
 ### Environment overrides

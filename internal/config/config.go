@@ -82,7 +82,7 @@ type Mapping struct {
 	// Description is a human-readable label.
 	Description string `yaml:"description" json:"description"`
 	// Lease is the requested mapping lifetime.
-	Lease time.Duration `yaml:"lease" json:"lease" default:"1h"`
+	Lease time.Duration `yaml:"lease" json:"lease" default:"30m"`
 	// RequireListener gates the mapping on a local listener bound to
 	// InternalPort: the forwarding is only created while a listener is present
 	// and is released when it disappears.

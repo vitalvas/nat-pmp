@@ -90,7 +90,7 @@ func TestEnsure(t *testing.T) {
 }
 
 func TestDaemonInternalAddr(t *testing.T) {
-	d := &Daemon{localAddr: netip.MustParseAddr("192.168.2.50")}
+	d := &Daemon{localIP: netip.MustParseAddr("192.168.2.50")}
 
 	t.Run("falls back to derived local address", func(t *testing.T) {
 		got := d.internalAddr(mapping.Request{Protocol: mapping.TCP, InternalPort: 22000})

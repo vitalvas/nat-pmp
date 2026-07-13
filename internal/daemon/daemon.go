@@ -40,19 +40,24 @@ type detectFunc func(ctx context.Context, gateway netip.Addr) (portmapper.Client
 // protocol's port.
 type listenerFunc func(protocol mapping.Protocol, port uint16) (bool, error)
 
+// localAddrFunc returns this host's LAN address on the route to the gateway.
+type localAddrFunc func(gateway netip.Addr) (netip.Addr, error)
+
 // Daemon maintains the configured port mappings.
 type Daemon struct {
-	cfg      config.Config
-	log      *slog.Logger
-	gateway  gatewayFunc
-	detect   detectFunc
-	listener listenerFunc
-	now      func() time.Time
-	newTimer func(d time.Duration) *time.Timer
+	cfg       config.Config
+	log       *slog.Logger
+	gateway   gatewayFunc
+	detect    detectFunc
+	listener  listenerFunc
+	localAddr localAddrFunc
+	now       func() time.Time
+	newTimer  func(d time.Duration) *time.Timer
 
 	// state, only touched by Run's single goroutine
 	client    portmapper.Client
-	localAddr netip.Addr
+	gatewayIP netip.Addr
+	localIP   netip.Addr
 	leases    map[key]mapping.Lease
 	nextAt    map[key]time.Time
 }
@@ -91,17 +96,23 @@ func WithListener(f listenerFunc) Option {
 	return func(d *Daemon) { d.listener = f }
 }
 
+// WithLocalAddr overrides local address discovery. Used in tests.
+func WithLocalAddr(f localAddrFunc) Option {
+	return func(d *Daemon) { d.localAddr = f }
+}
+
 // New builds a daemon from configuration.
 func New(cfg config.Config, log *slog.Logger, opts ...Option) *Daemon {
 	d := &Daemon{
-		cfg:      cfg,
-		log:      log,
-		gateway:  defaultGateway,
-		listener: portcheck.HasListener,
-		now:      time.Now,
-		newTimer: time.NewTimer,
-		leases:   make(map[key]mapping.Lease),
-		nextAt:   make(map[key]time.Time),
+		cfg:       cfg,
+		log:       log,
+		gateway:   defaultGateway,
+		listener:  portcheck.HasListener,
+		localAddr: localAddrFor,
+		now:       time.Now,
+		newTimer:  time.NewTimer,
+		leases:    make(map[key]mapping.Lease),
+		nextAt:    make(map[key]time.Time),
 	}
 	d.detect = d.defaultDetect
 	for _, opt := range opts {
@@ -124,23 +135,40 @@ func (d *Daemon) Run(ctx context.Context) error {
 		return err
 	}
 	d.client = client
+	d.gatewayIP = gateway
 	d.log.Info("protocol detected", "protocol", client.Name())
 
-	// Derive this host's LAN address on the route to the gateway. It is logged
-	// as the internal address for mappings that do not target a specific address,
-	// and UPnP additionally advertises it in AddPortMapping calls.
-	if local, err := localAddrFor(gateway); err == nil {
-		d.localAddr = local
-	} else {
-		d.log.Warn("could not determine local address", "error", err)
-	}
-	if u, ok := client.(*upnp.Client); ok {
-		u.SetInternalClient(d.localAddr)
-	}
+	// Derive this host's LAN address on the route to the gateway and advertise
+	// it to the UPnP client. It is refreshed on every reconcile pass so a change
+	// to the machine's primary IP is picked up rather than serving a stale value.
+	d.refreshLocalAddr()
 
 	d.reconcileAll(ctx)
 
 	return d.renewLoop(ctx)
+}
+
+// refreshLocalAddr re-derives this host's LAN address on the route to the
+// gateway. It is logged as the internal address for mappings that do not target
+// a specific address, and UPnP additionally advertises it in AddPortMapping
+// calls. When the address changes, the UPnP client is updated so subsequent
+// mappings advertise the current address rather than a cached one. A discovery
+// failure leaves the previously known address in place.
+func (d *Daemon) refreshLocalAddr() {
+	local, err := d.localAddr(d.gatewayIP)
+	if err != nil {
+		d.log.Warn("could not determine local address", "error", err)
+		return
+	}
+	if local != d.localIP {
+		if d.localIP.IsValid() {
+			d.log.Info("local address changed", "old", d.localIP, "new", local)
+		}
+		d.localIP = local
+	}
+	if u, ok := d.client.(*upnp.Client); ok {
+		u.SetInternalClient(d.localIP)
+	}
 }
 
 // requests expands the configured mappings into individual protocol-agnostic
@@ -249,7 +277,7 @@ func (d *Daemon) internalAddr(req mapping.Request) netip.Addr {
 	if req.InternalAddress.IsValid() {
 		return req.InternalAddress
 	}
-	return d.localAddr
+	return d.localIP
 }
 
 // renewLoop waits for the soonest scheduled renewal and refreshes due mappings,
@@ -291,8 +319,11 @@ func (d *Daemon) timeUntilNext() (time.Duration, bool) {
 	return wait, true
 }
 
-// renewDue refreshes every mapping whose scheduled time has arrived.
+// renewDue refreshes every mapping whose scheduled time has arrived. It first
+// re-derives the host's local address so a changed primary IP is reflected in
+// the mappings it renews.
 func (d *Daemon) renewDue(ctx context.Context) {
+	d.refreshLocalAddr()
 	now := d.now()
 	for _, req := range d.requests() {
 		k := keyOf(req)

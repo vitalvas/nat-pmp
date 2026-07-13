@@ -46,8 +46,8 @@ mappings:
 		assert.Equal(t, uint16(22000), cfg.Mappings[0].InternalPort)
 		assert.Equal(t, 2*time.Hour, cfg.Mappings[0].Lease)
 
-		// Second mapping omits lease -> default 1h applied to slice element.
-		assert.Equal(t, time.Hour, cfg.Mappings[1].Lease)
+		// Second mapping omits lease -> default 30m applied to slice element.
+		assert.Equal(t, 30*time.Minute, cfg.Mappings[1].Lease)
 		assert.Equal(t, uint16(0), cfg.Mappings[1].ExternalPort)
 	})
 

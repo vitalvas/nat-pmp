@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/vitalvas/nat-pmp/compare/v0.3.1...v0.4.0) (2026-07-13)
+
+
+### Features
+
+* refresh internal address on renewal and lower default lease ([9258b97](https://github.com/vitalvas/nat-pmp/commit/9258b973d4ef69d19734f061219d85421e496709))
+
 ## [0.3.1](https://github.com/vitalvas/nat-pmp/compare/v0.3.0...v0.3.1) (2026-07-08)
 
 

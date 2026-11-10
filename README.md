@@ -101,13 +101,13 @@ the underlying protocols map one transport per request.
 | Field                    | Type     | Default | Description                                                        |
 | ------------------------ | -------- | ------- | ------------------------------------------------------------------ |
 | `log_level`              | string   | `info`  | Log verbosity: `debug`, `info`, `warn`, or `error`.                |
-| `internal_address`       | string   | (auto)  | Default LAN address mappings forward to. Empty auto-derives it from the route to the gateway. Must be bound to a local interface. |
+| `internal_address`       | string   | (auto)  | Default LAN IPv4 address mappings forward to. Empty auto-derives it from the route to the gateway. Must be usable and bound to a local interface. |
 | `internal_iface`         | string   | (unset) | Default interface whose first usable IPv4 mappings forward to. Mutually exclusive with `internal_address`. |
 | `detect.order`           | list     | (auto)  | Protocol probe order. Valid: `natpmp`, `pcp`, `upnp`.              |
 | `detect.timeout`         | duration | `3s`    | Time budget for each protocol probe during detection.              |
 | `mappings[].protocol`    | string   | —       | Transport protocol: `tcp`, `udp`, or `both` (forwards over TCP and UDP). |
 | `mappings[].internal_port` | uint16 | —       | Local port that traffic is forwarded to. Must be non-zero.         |
-| `mappings[].internal_address` | string | (default) | LAN address this mapping forwards to. Overrides the top-level default. Must be bound to a local interface. |
+| `mappings[].internal_address` | string | (default) | LAN IPv4 address this mapping forwards to. Overrides the top-level default. Must be usable and bound to a local interface. |
 | `mappings[].internal_iface` | string | (default) | Interface whose first usable IPv4 this mapping forwards to. Overrides the top-level default. Mutually exclusive with `mappings[].internal_address`. |
 | `mappings[].external_port` | uint16 | `0`     | Requested WAN-side port. `0` lets the router choose a port.        |
 | `mappings[].description` | string   | `""`    | Human-readable label for the mapping.                              |
@@ -121,11 +121,12 @@ For example, `NATPMP_LOG_LEVEL=debug` overrides `log_level`.
 
 ### Validation
 
-The configuration is rejected at startup if it declares no mappings, uses a
-protocol other than `tcp`/`udp`/`both`, uses an invalid detection protocol or log
-level, has a zero internal port, sets an internal address that does not parse or
-is not bound to any local interface, sets an internal interface that does not
-exist or has no usable IPv4 address, sets both `internal_address` and
+The configuration is rejected at startup if it contains an unknown key,
+declares no mappings, uses a protocol other than `tcp`/`udp`/`both`, uses an
+invalid detection protocol or log level, has a zero internal port, sets an
+internal address that is not a usable IPv4 address bound to a local interface,
+sets an internal interface that does not exist or has no usable IPv4 address,
+sets both `internal_address` and
 `internal_iface` at the same level, has a negative lease, defines two mappings
 with the same protocol and internal port, or defines two mappings with the same
 protocol and non-zero external port. Leases must be whole-second durations no

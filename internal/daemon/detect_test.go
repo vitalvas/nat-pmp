@@ -54,6 +54,29 @@ func TestDetect(t *testing.T) {
 		_, err := detect(ctx, testGW, cands, time.Second)
 		require.ErrorIs(t, err, context.Canceled)
 	})
+
+	t.Run("uses state-free protocol probe when available", func(t *testing.T) {
+		client := &fakeProbeClient{fakeClient: newFakeClient()}
+		client.extIPErr = assert.AnError
+		cands := []candidate{{
+			name:    "state-free",
+			newFunc: func(netip.Addr) portmapper.Client { return client },
+		}}
+		got, err := detect(context.Background(), testGW, cands, time.Second)
+		require.NoError(t, err)
+		assert.Same(t, client, got)
+		assert.Equal(t, 1, client.probes)
+	})
+}
+
+type fakeProbeClient struct {
+	*fakeClient
+	probes int
+}
+
+func (c *fakeProbeClient) Probe(context.Context) error {
+	c.probes++
+	return nil
 }
 
 func TestOrderCandidates(t *testing.T) {

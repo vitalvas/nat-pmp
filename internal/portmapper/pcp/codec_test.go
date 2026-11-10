@@ -155,6 +155,28 @@ func TestTo16(t *testing.T) {
 	assert.Equal(t, byte(0x20), v6[0])
 }
 
+func TestAnnounceCodec(t *testing.T) {
+	client := netip.MustParseAddr("192.168.1.50")
+	req, err := encodeAnnounceRequest(client)
+	require.NoError(t, err)
+	require.Len(t, req, requestHdrLen)
+	assert.Equal(t, byte(protoVersion), req[0])
+	assert.Equal(t, byte(opAnnounce), req[1])
+	assert.Equal(t, []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 192, 168, 1, 50}, req[8:24])
+
+	resp := make([]byte, responseHdrLen)
+	resp[0] = protoVersion
+	resp[1] = opAnnounce | responseFlag
+	require.NoError(t, decodeAnnounceResponse(resp))
+
+	resp[3] = resultNotAuthorized
+	assert.ErrorIs(t, decodeAnnounceResponse(resp), portmapper.ErrNotAuthorized)
+	require.Error(t, decodeAnnounceResponse(resp[:4]))
+
+	_, err = encodeAnnounceRequest(netip.Addr{})
+	require.Error(t, err)
+}
+
 // helpers
 
 func beUint16(b []byte) uint16 { return uint16(b[0])<<8 | uint16(b[1]) }

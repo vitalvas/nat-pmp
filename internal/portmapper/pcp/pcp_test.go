@@ -189,6 +189,18 @@ func TestExternalIP(t *testing.T) {
 	})
 }
 
+func TestProbeUsesAnnounce(t *testing.T) {
+	resp := make([]byte, responseHdrLen)
+	resp[0] = protoVersion
+	resp[1] = opAnnounce | responseFlag
+	conn := &fakeConn{replies: []reply{{data: resp}}}
+	c := newTestClient(conn)
+	require.NoError(t, c.Probe(context.Background()))
+	require.Len(t, conn.writes, 1)
+	assert.Equal(t, byte(opAnnounce), conn.writes[0][1])
+	assert.Len(t, conn.writes[0], requestHdrLen)
+}
+
 func TestMap(t *testing.T) {
 	t.Run("success returns granted lease", func(t *testing.T) {
 		conn := &fakeConn{replies: []reply{{data: mapResp(netip.MustParseAddr("203.0.113.1"), 22000, 30000, 3600)}}}
@@ -204,6 +216,9 @@ func TestMap(t *testing.T) {
 		assert.Equal(t, netip.MustParseAddr("203.0.113.1"), lease.ExternalIP)
 		assert.Equal(t, time.Hour, lease.Lifetime)
 		assert.Equal(t, fixedClock()(), lease.Acquired)
+		// An IPv4 PCP client must encode the IPv4 all-zeros address as an
+		// IPv4-mapped IPv6 address, not as the IPv6 all-zeros address.
+		assert.Equal(t, []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 0, 0, 0, 0}, conn.writes[0][44:60])
 	})
 
 	t.Run("applies default lease", func(t *testing.T) {
@@ -339,7 +354,8 @@ func TestUnmap(t *testing.T) {
 		require.NoError(t, err)
 		req := conn.writes[0]
 		assert.Equal(t, uint32(0), beUint32(req[4:8]))
-		assert.Equal(t, uint16(30000), beUint16(req[42:44]))
+		assert.Equal(t, uint16(0), beUint16(req[42:44]))
+		assert.Equal(t, []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 0, 0, 0, 0}, req[44:60])
 	})
 
 	t.Run("dial error", func(t *testing.T) {
@@ -439,6 +455,30 @@ func TestNonceReusedUntilUnmap(t *testing.T) {
 }
 
 func TestExchangeErrorPaths(t *testing.T) {
+	t.Run("ignores unrelated response from server", func(t *testing.T) {
+		otherNonce := [nonceLen]byte{99}
+		conn := &fakeConn{replies: []reply{
+			{data: buildMapResponse(0, 0, otherNonce, ipProtoTCP, 0, 0, netip.IPv4Unspecified())},
+			{data: mapResp(netip.MustParseAddr("203.0.113.9"), 0, 0, 0)},
+		}}
+		c := newTestClient(conn)
+		ip, err := c.ExternalIP(context.Background())
+		require.NoError(t, err)
+		assert.Equal(t, netip.MustParseAddr("203.0.113.9"), ip)
+		assert.Len(t, conn.writes, 1)
+	})
+
+	t.Run("ignores malformed response from server", func(t *testing.T) {
+		conn := &fakeConn{replies: []reply{
+			{data: make([]byte, 40)},
+			{data: mapResp(netip.MustParseAddr("203.0.113.9"), 0, 0, 0)},
+		}}
+		c := newTestClient(conn)
+		ip, err := c.ExternalIP(context.Background())
+		require.NoError(t, err)
+		assert.Equal(t, netip.MustParseAddr("203.0.113.9"), ip)
+	})
+
 	t.Run("write error", func(t *testing.T) {
 		conn := &fakeConn{writeErr: assert.AnError}
 		c := newTestClient(conn)

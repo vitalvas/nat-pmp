@@ -141,6 +141,17 @@ func (c *Client) resolveTarget(ctx context.Context) (controlTarget, error) {
 	return controlTarget{}, fmt.Errorf("upnp: no usable gateway descriptor")
 }
 
+// invalidateTarget drops a cached endpoint after an operation against it
+// fails. Routers can change their descriptor or control URL after a reboot;
+// retaining the old URL forever would make every later renewal fail.
+func (c *Client) invalidateTarget(target controlTarget) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.target != nil && *c.target == target {
+		c.target = nil
+	}
+}
+
 // ExternalIP returns the gateway's WAN address via GetExternalIPAddress.
 func (c *Client) ExternalIP(ctx context.Context) (netip.Addr, error) {
 	target, err := c.resolveTarget(ctx)
@@ -149,14 +160,17 @@ func (c *Client) ExternalIP(ctx context.Context) (netip.Addr, error) {
 	}
 	body, err := callSOAP(ctx, c.doer, target, "GetExternalIPAddress", nil)
 	if err != nil {
+		c.invalidateTarget(target)
 		return netip.Addr{}, err
 	}
 	value, err := parseStringField(body, "NewExternalIPAddress")
 	if err != nil {
+		c.invalidateTarget(target)
 		return netip.Addr{}, err
 	}
 	addr, err := netip.ParseAddr(value)
 	if err != nil {
+		c.invalidateTarget(target)
 		return netip.Addr{}, fmt.Errorf("upnp: parse external IP %q: %w", value, err)
 	}
 	return addr, nil
@@ -214,6 +228,7 @@ func (c *Client) Map(ctx context.Context, r mapping.Request) (mapping.Lease, err
 		{Name: "NewLeaseDuration", Value: strconv.FormatInt(int64(lifetime/time.Second), 10)},
 	}
 	if _, err := callSOAP(ctx, c.doer, target, "AddPortMapping", args); err != nil {
+		c.invalidateTarget(target)
 		return mapping.Lease{}, err
 	}
 
@@ -253,6 +268,9 @@ func (c *Client) Unmap(ctx context.Context, r mapping.Request) error {
 		{Name: "NewProtocol", Value: proto},
 	}
 	_, err = callSOAP(ctx, c.doer, target, "DeletePortMapping", args)
+	if err != nil {
+		c.invalidateTarget(target)
+	}
 	return err
 }
 

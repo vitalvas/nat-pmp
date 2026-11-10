@@ -389,6 +389,30 @@ func TestMapBindsInternalAddress(t *testing.T) {
 }
 
 func TestExchangeErrorPaths(t *testing.T) {
+	t.Run("ignores unrelated response from server", func(t *testing.T) {
+		conn := &fakeConn{replies: []reply{
+			{data: mapReply(opMapTCP, 22000, 30000, 3600)},
+			{data: extAddrReply([4]byte{203, 0, 113, 7})},
+		}}
+		c := newTestClient(conn)
+		ip, err := c.ExternalIP(context.Background())
+		require.NoError(t, err)
+		assert.Equal(t, netip.MustParseAddr("203.0.113.7"), ip)
+		assert.Len(t, conn.writes, 1)
+	})
+
+	t.Run("ignores oversized response from server", func(t *testing.T) {
+		oversized := append(extAddrReply([4]byte{1, 1, 1, 1}), 0)
+		conn := &fakeConn{replies: []reply{
+			{data: oversized},
+			{data: extAddrReply([4]byte{203, 0, 113, 7})},
+		}}
+		c := newTestClient(conn)
+		ip, err := c.ExternalIP(context.Background())
+		require.NoError(t, err)
+		assert.Equal(t, netip.MustParseAddr("203.0.113.7"), ip)
+	})
+
 	t.Run("write error", func(t *testing.T) {
 		conn := &fakeConn{writeErr: assert.AnError}
 		c := newTestClient(conn)

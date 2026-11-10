@@ -118,7 +118,9 @@ func (c *Client) exchange(ctx context.Context, bindAddr netip.Addr, req []byte, 
 	}
 	defer conn.Close()
 
-	buf := make([]byte, 16)
+	// One extra byte lets us reject oversized fixed-format NAT-PMP replies
+	// instead of accepting a truncated datagram as valid.
+	buf := make([]byte, 17)
 	timeout := c.initialTimeout
 
 	for attempt := 0; attempt < c.maxAttempts; attempt++ {
@@ -154,16 +156,13 @@ func (c *Client) exchange(ctx context.Context, bindAddr netip.Addr, req []byte, 
 				}
 				return nil, fmt.Errorf("natpmp: read: %w", err)
 			}
-			if from != c.serverAddr() {
+			if from != c.serverAddr() || !matchesResponse(req, buf[:n], respLen) {
 				ignored++
 				if ignored >= maxIgnoredResponses {
 					timeout *= 2
 					break
 				}
 				continue
-			}
-			if n < respLen {
-				return nil, fmt.Errorf("natpmp: short response: %d bytes", n)
 			}
 			out := make([]byte, n)
 			copy(out, buf[:n])
@@ -175,6 +174,22 @@ func (c *Client) exchange(ctx context.Context, bindAddr netip.Addr, req []byte, 
 		return nil, err
 	}
 	return nil, fmt.Errorf("natpmp: no response after %d attempts", c.maxAttempts)
+}
+
+// matchesResponse reports whether a datagram can be the response to req.
+// NAT-PMP has no transaction ID, so matching uses the response opcode and,
+// for mapping operations, the echoed internal port.
+func matchesResponse(req, resp []byte, respLen int) bool {
+	if len(req) < 2 || len(resp) != respLen || len(resp) < 2 {
+		return false
+	}
+	if resp[1] != req[1]+opResponseFlag {
+		return false
+	}
+	if req[1] == opExternalAddress {
+		return true
+	}
+	return len(req) >= 6 && len(resp) >= 10 && req[4] == resp[8] && req[5] == resp[9]
 }
 
 func isTimeout(err error) bool {

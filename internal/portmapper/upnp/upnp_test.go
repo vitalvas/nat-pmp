@@ -367,6 +367,40 @@ func TestResolveTarget(t *testing.T) {
 		_, err := c.ExternalIP(context.Background())
 		require.Error(t, err)
 	})
+
+	t.Run("failed endpoint is rediscovered", func(t *testing.T) {
+		bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}))
+		defer bad.Close()
+		good := soapRouter(t, map[string]string{"GetExternalIPAddress": extIPResponse})
+		defer good.Close()
+
+		locations := []string{
+			fmt.Sprintf("%s/desc.xml", bad.URL),
+			fmt.Sprintf("%s/desc.xml", good.URL),
+		}
+		searches := 0
+		c := New(
+			WithHTTPClient(good.Client()),
+			WithSearch(func(context.Context) ([]ssdpResult, error) {
+				loc := locations[min(searches, len(locations)-1)]
+				searches++
+				return []ssdpResult{{Location: loc}}, nil
+			}),
+			WithFetch(func(_ context.Context, location string) ([]byte, error) {
+				base := strings.TrimSuffix(location, "/desc.xml")
+				return []byte(fmt.Sprintf(`<root><device><serviceList><service><serviceType>urn:schemas-upnp-org:service:WANIPConnection:1</serviceType><controlURL>%s/control</controlURL></service></serviceList></device></root>`, base)), nil
+			}),
+		)
+
+		_, err := c.ExternalIP(context.Background())
+		require.Error(t, err)
+		ip, err := c.ExternalIP(context.Background())
+		require.NoError(t, err)
+		assert.Equal(t, netip.MustParseAddr("203.0.113.42"), ip)
+		assert.Equal(t, 2, searches)
+	})
 }
 
 func TestFetchHTTP(t *testing.T) {

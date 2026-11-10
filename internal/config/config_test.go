@@ -85,6 +85,18 @@ mappings:
 		require.Error(t, err)
 	})
 
+	t.Run("unknown field", func(t *testing.T) {
+		path := writeConfig(t, `
+mappings:
+  - protocol: tcp
+    internal_port: 80
+    require_listerner: true
+`)
+		_, err := Load(path)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "require_listerner")
+	})
+
 	t.Run("invalid protocol fails validation", func(t *testing.T) {
 		path := writeConfig(t, `
 mappings:
@@ -275,6 +287,16 @@ func TestValidateInternalAddress(t *testing.T) {
 		require.Error(t, cfg.Validate())
 	})
 
+	t.Run("IPv6 address rejected", func(t *testing.T) {
+		cfg := Config{InternalAddress: "2001:db8::1", Mappings: []Mapping{{Protocol: "tcp", InternalPort: 80}}}
+		require.Error(t, cfg.Validate())
+	})
+
+	t.Run("non-LAN address rejected", func(t *testing.T) {
+		cfg := Config{InternalAddress: "127.0.0.1", Mappings: []Mapping{{Protocol: "tcp", InternalPort: 80}}}
+		require.Error(t, cfg.Validate())
+	})
+
 	t.Run("address not on any interface rejected", func(t *testing.T) {
 		cfg := Config{Mappings: []Mapping{{Protocol: "tcp", InternalPort: 80, InternalAddress: "172.16.0.9"}}}
 		require.Error(t, cfg.Validate())
@@ -356,10 +378,12 @@ func TestValidateInternalIface(t *testing.T) {
 }
 
 func TestFirstUsableIPv4(t *testing.T) {
-	t.Run("skips loopback and link-local", func(t *testing.T) {
+	t.Run("skips unusable IPv4 addresses", func(t *testing.T) {
 		addr, ok := firstUsableIPv4([]netip.Addr{
+			netip.IPv4Unspecified(),
 			netip.MustParseAddr("127.0.0.1"),
 			netip.MustParseAddr("169.254.0.7"),
+			netip.MustParseAddr("224.0.0.1"),
 			netip.MustParseAddr("192.168.1.50"),
 		})
 		require.True(t, ok)

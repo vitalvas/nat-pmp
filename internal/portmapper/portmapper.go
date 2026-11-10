@@ -31,8 +31,8 @@ var (
 // port-mapping protocol.
 type Client interface {
 	// ExternalIP returns the gateway's current WAN address. It also serves as
-	// the probe used during protocol detection: an error means the gateway does
-	// not answer this protocol.
+	// the default protocol-detection probe; protocols with a state-free probe
+	// may expose that separately to the daemon.
 	ExternalIP(ctx context.Context) (netip.Addr, error)
 
 	// Map creates or refreshes a single mapping and returns the granted lease.

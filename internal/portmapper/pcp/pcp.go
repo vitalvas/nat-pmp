@@ -1,6 +1,7 @@
 package pcp
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"errors"
@@ -196,7 +197,9 @@ func (c *Client) deleteNonce(r mapping.Request) {
 // response of at least the expected length, retransmitting with exponential
 // backoff.
 func (c *Client) exchangeOn(ctx context.Context, conn packetConn, req []byte) ([]byte, error) {
-	buf := make([]byte, 1100)
+	// One extra byte lets us detect and discard packets over PCP's 1100-byte
+	// maximum instead of accidentally accepting a truncated datagram.
+	buf := make([]byte, 1101)
 	timeout := c.initialTimeout
 
 	for attempt := 0; attempt < c.maxAttempts; attempt++ {
@@ -232,16 +235,13 @@ func (c *Client) exchangeOn(ctx context.Context, conn packetConn, req []byte) ([
 				}
 				return nil, fmt.Errorf("pcp: read: %w", err)
 			}
-			if from != c.serverAddr() {
+			if from != c.serverAddr() || !matchesResponse(req, buf[:n]) {
 				ignored++
 				if ignored >= maxIgnoredResponses {
 					timeout *= 2
 					break
 				}
 				continue
-			}
-			if n < responseLen {
-				return nil, fmt.Errorf("pcp: short response: %d bytes", n)
 			}
 			out := make([]byte, n)
 			copy(out, buf[:n])
@@ -253,6 +253,53 @@ func (c *Client) exchangeOn(ctx context.Context, conn packetConn, req []byte) ([
 		return nil, err
 	}
 	return nil, fmt.Errorf("pcp: no response after %d attempts", c.maxAttempts)
+}
+
+// matchesResponse reports whether a datagram can be the response to req.
+// PCP clients must silently ignore malformed and unrelated responses, which
+// can include delayed mapping updates sent by the same server.
+func matchesResponse(req, resp []byte) bool {
+	if len(req) < requestHdrLen || len(resp) < responseHdrLen || len(resp) > 1100 || len(resp)%4 != 0 {
+		return false
+	}
+	if resp[1] != req[1]|responseFlag {
+		return false
+	}
+	if req[1] == opAnnounce {
+		return true
+	}
+	if req[1] != opMap || len(req) < requestLen || len(resp) < responseLen {
+		return false
+	}
+	return bytes.Equal(resp[24:36], req[24:36]) &&
+		resp[36] == req[36] &&
+		bytes.Equal(resp[40:42], req[40:42])
+}
+
+// Probe checks for a PCP server without creating or deleting mapping state.
+func (c *Client) Probe(ctx context.Context) error {
+	conn, clientAddr, err := c.dial(netip.Addr{})
+	if err != nil {
+		return fmt.Errorf("pcp: dial: %w", err)
+	}
+	defer conn.Close()
+
+	req, err := encodeAnnounceRequest(clientAddr)
+	if err != nil {
+		return err
+	}
+	resp, err := c.exchangeOn(ctx, conn, req)
+	if err != nil {
+		return err
+	}
+	return decodeAnnounceResponse(resp)
+}
+
+func unspecifiedExternalAddr(clientAddr netip.Addr) netip.Addr {
+	if clientAddr.Is4() || clientAddr.Is4In6() {
+		return netip.IPv4Unspecified()
+	}
+	return netip.IPv6Unspecified()
 }
 
 func isTimeout(err error) bool {
@@ -279,7 +326,7 @@ func (c *Client) ExternalIP(ctx context.Context) (netip.Addr, error) {
 		Protocol:     mapping.TCP,
 		InternalPort: 0,
 		ExternalPort: 0,
-		ExternalAddr: netip.IPv6Unspecified(),
+		ExternalAddr: unspecifiedExternalAddr(clientAddr),
 		ClientAddr:   clientAddr,
 		LifetimeSec:  0,
 	})
@@ -331,7 +378,7 @@ func (c *Client) Map(ctx context.Context, r mapping.Request) (mapping.Lease, err
 		Protocol:     r.Protocol,
 		InternalPort: r.InternalPort,
 		ExternalPort: r.ExternalPort,
-		ExternalAddr: netip.IPv6Unspecified(),
+		ExternalAddr: unspecifiedExternalAddr(clientAddr),
 		ClientAddr:   clientAddr,
 		LifetimeSec:  uint32(lifetime / time.Second),
 	})
@@ -394,8 +441,10 @@ func (c *Client) Unmap(ctx context.Context, r mapping.Request) error {
 		Nonce:        nonce,
 		Protocol:     r.Protocol,
 		InternalPort: r.InternalPort,
-		ExternalPort: r.ExternalPort,
-		ExternalAddr: netip.IPv6Unspecified(),
+		// RFC 6887 section 15.1 requires both suggested external fields to
+		// be zero in deletion requests, even when the assigned port is known.
+		ExternalPort: 0,
+		ExternalAddr: unspecifiedExternalAddr(clientAddr),
 		ClientAddr:   clientAddr,
 		LifetimeSec:  0,
 	})

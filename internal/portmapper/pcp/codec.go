@@ -17,6 +17,7 @@ const protoVersion = 2
 
 // opMap is the MAP opcode. The response flag is the high bit of the opcode byte.
 const (
+	opAnnounce     = 0
 	opMap          = 1
 	responseFlag   = 0x80
 	nonceLen       = 12
@@ -26,6 +27,33 @@ const (
 	responseHdrLen = 24
 	responseLen    = responseHdrLen + mapOpDataLen // 60
 )
+
+// encodeAnnounceRequest builds the state-free PCP probe defined by RFC 6887
+// section 14.1.2.
+func encodeAnnounceRequest(clientAddr netip.Addr) ([]byte, error) {
+	if !clientAddr.IsValid() {
+		return nil, fmt.Errorf("pcp: invalid client address")
+	}
+	b := make([]byte, requestHdrLen)
+	b[0] = protoVersion
+	b[1] = opAnnounce
+	client := to16(clientAddr)
+	copy(b[8:24], client[:])
+	return b, nil
+}
+
+func decodeAnnounceResponse(b []byte) error {
+	if len(b) < responseHdrLen {
+		return fmt.Errorf("pcp: announce response too short: %d bytes", len(b))
+	}
+	if b[0] != protoVersion {
+		return fmt.Errorf("pcp: unexpected version %d", b[0])
+	}
+	if b[1] != opAnnounce|responseFlag {
+		return fmt.Errorf("pcp: unexpected opcode byte 0x%02x", b[1])
+	}
+	return resultError(b[3])
+}
 
 // IANA transport protocol numbers used in the MAP opcode.
 const (

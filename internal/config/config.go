@@ -163,6 +163,10 @@ func resolveInternalAddress(address, iface string) (addr netip.Addr, set bool, e
 		if perr != nil {
 			return netip.Addr{}, true, fmt.Errorf("config: invalid internal_address %q: %w", address, perr)
 		}
+		parsed = parsed.Unmap()
+		if !usableIPv4(parsed) {
+			return netip.Addr{}, true, fmt.Errorf("config: internal_address %q must be a usable IPv4 address", address)
+		}
 		return parsed, true, nil
 	}
 	if iface != "" {
@@ -183,7 +187,12 @@ func Load(filename string) (Config, error) {
 	}
 
 	var cfg Config
-	if err := xconfig.Load(&cfg, xconfig.WithFiles(filename), xconfig.WithEnv(EnvPrefix)); err != nil {
+	if err := xconfig.Load(
+		&cfg,
+		xconfig.WithFiles(filename),
+		xconfig.WithEnv(EnvPrefix),
+		xconfig.WithStrict(true),
+	); err != nil {
 		return Config{}, fmt.Errorf("load config: %w", err)
 	}
 	if err := cfg.Validate(); err != nil {
@@ -241,15 +250,17 @@ func parseInterfaceAddrs(ifaceAddrs []net.Addr) []netip.Addr {
 func firstUsableIPv4(addrs []netip.Addr) (netip.Addr, bool) {
 	for _, a := range addrs {
 		a = a.Unmap()
-		if !a.Is4() {
-			continue
-		}
-		if a.IsLoopback() || a.IsLinkLocalUnicast() {
+		if !usableIPv4(a) {
 			continue
 		}
 		return a, true
 	}
 	return netip.Addr{}, false
+}
+
+func usableIPv4(addr netip.Addr) bool {
+	return addr.Is4() && !addr.IsUnspecified() && !addr.IsLoopback() &&
+		!addr.IsLinkLocalUnicast() && !addr.IsMulticast()
 }
 
 // resolveIface resolves the named interface to its first usable IPv4 address.
@@ -362,7 +373,7 @@ func (c Config) validateInternalAddresses() (netip.Addr, error) {
 	}
 	localSet := make(map[netip.Addr]struct{}, len(local))
 	for _, a := range local {
-		localSet[a] = struct{}{}
+		localSet[a.Unmap()] = struct{}{}
 	}
 	for _, addr := range resolved {
 		if _, ok := localSet[addr]; !ok {

@@ -19,6 +19,10 @@ type candidate struct {
 	newFunc func(gateway netip.Addr) portmapper.Client
 }
 
+type protocolProber interface {
+	Probe(context.Context) error
+}
+
 // defaultCandidates returns the protocol clients to probe, in the default
 // preference order: NAT-PMP and PCP (fast UDP probes) before UPnP (slower SSDP).
 func defaultCandidates() []candidate {
@@ -57,12 +61,18 @@ func orderCandidates(all []candidate, order []string) []candidate {
 }
 
 // detect probes each candidate in order and returns the first client whose
-// gateway answers. Each probe is bounded by timeout.
+// gateway answers. Each probe is bounded by timeout. Protocols may provide a
+// state-free Probe method; otherwise ExternalIP is used as the probe.
 func detect(ctx context.Context, gateway netip.Addr, candidates []candidate, timeout time.Duration) (portmapper.Client, error) {
 	for _, c := range candidates {
 		client := c.newFunc(gateway)
 		probeCtx, cancel := context.WithTimeout(ctx, timeout)
-		_, err := client.ExternalIP(probeCtx)
+		var err error
+		if prober, ok := client.(protocolProber); ok {
+			err = prober.Probe(probeCtx)
+		} else {
+			_, err = client.ExternalIP(probeCtx)
+		}
 		cancel()
 		if err == nil {
 			return client, nil

@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.vitalvas.com/gokit/xflags"
 )
 
 func TestParseLevel(t *testing.T) {
@@ -42,12 +42,10 @@ func TestNewLogger(t *testing.T) {
 
 func TestNewRootCommand(t *testing.T) {
 	cmd := newRootCommand("1.2.3")
-	assert.Equal(t, "nat-pmp", cmd.Use)
-	assert.Equal(t, "1.2.3", cmd.Version)
-	assert.NotNil(t, cmd.Args)
-	flag := cmd.Flags().Lookup("config")
-	require.NotNil(t, flag)
-	assert.Equal(t, "config.yaml", flag.DefValue)
+	assert.Equal(t, "nat-pmp", cmd.Name())
+	help := cmd.Help()
+	assert.Contains(t, help, "--config")
+	assert.Contains(t, help, "config.yaml")
 }
 
 func TestRunConfigLoadError(t *testing.T) {
@@ -76,14 +74,14 @@ func TestExecuteReturnsErrorCode(t *testing.T) {
 	t.Run("command error surfaces", func(t *testing.T) {
 		cmd := newRootCommand("1.2.3")
 		cmd.SetArgs([]string{"--config", filepath.Join(t.TempDir(), "absent.yaml")})
-		err := cmd.ExecuteContext(context.Background())
+		err := cmd.Execute(context.Background())
 		require.Error(t, err)
 	})
 
 	t.Run("extra positional args rejected", func(t *testing.T) {
 		cmd := newRootCommand("1.2.3")
 		cmd.SetArgs([]string{"unexpected"})
-		err := cmd.ExecuteContext(context.Background())
+		err := cmd.Execute(context.Background())
 		require.Error(t, err)
 	})
 
@@ -97,11 +95,10 @@ func TestExecuteReturnsErrorCode(t *testing.T) {
 }
 
 func TestExecuteCommandSuccessCode(t *testing.T) {
-	cmd := &cobra.Command{
-		Use: "ok",
-		RunE: func(*cobra.Command, []string) error {
-			return nil
-		},
-	}
+	cmd := xflags.New("ok")
+	cmd.SetArgs([]string{})
+	cmd.SetRun(func(context.Context, *xflags.Command, []string) error {
+		return nil
+	})
 	assert.Equal(t, 0, executeCommand(context.Background(), cmd))
 }

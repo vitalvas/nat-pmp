@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/vitalvas/gokit/xconfig"
+	"go.vitalvas.com/gokit/xconfig"
 
 	"go.vitalvas.com/nat-pmp/internal/mapping"
 )

@@ -12,7 +12,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/spf13/cobra"
+	"go.vitalvas.com/gokit/xflags"
 
 	"go.vitalvas.com/nat-pmp/internal/config"
 	"go.vitalvas.com/nat-pmp/internal/daemon"
@@ -23,8 +23,8 @@ func Execute(ctx context.Context, version string) int {
 	return executeCommand(ctx, newRootCommand(version))
 }
 
-func executeCommand(ctx context.Context, cmd *cobra.Command) int {
-	if err := cmd.ExecuteContext(ctx); err != nil {
+func executeCommand(ctx context.Context, cmd *xflags.Parser) int {
+	if err := cmd.Execute(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		return 1
 	}
@@ -32,21 +32,19 @@ func executeCommand(ctx context.Context, cmd *cobra.Command) int {
 }
 
 // newRootCommand builds the root command that runs the daemon.
-func newRootCommand(version string) *cobra.Command {
+func newRootCommand(version string) *xflags.Parser {
 	var configPath string
 
-	cmd := &cobra.Command{
-		Use:           "nat-pmp",
-		Short:         "Maintain router port forwardings via UPnP, NAT-PMP, or PCP",
-		Version:       version,
-		Args:          cobra.NoArgs,
-		SilenceUsage:  true,
-		SilenceErrors: true,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return run(cmd.Context(), configPath)
-		},
-	}
-	cmd.Flags().StringVarP(&configPath, "config", "c", "config.yaml", "path to the YAML configuration file")
+	cmd := xflags.New("nat-pmp")
+	cmd.SetDescription("Maintain router port forwardings via UPnP, NAT-PMP, or PCP")
+	cmd.SetVersion(version)
+	_ = cmd.StringVar(&configPath, "config", "c", "config.yaml", "path to the YAML configuration file")
+	cmd.SetRun(func(ctx context.Context, _ *xflags.Command, args []string) error {
+		if len(args) != 0 {
+			return fmt.Errorf("unexpected arguments: %s", strings.Join(args, " "))
+		}
+		return run(ctx, configPath)
+	})
 	return cmd
 }
 

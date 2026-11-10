@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/vitalvas/nat-pmp/internal/mapping"
+	"go.vitalvas.com/nat-pmp/internal/mapping"
 )
 
 const tcpHeader = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode"

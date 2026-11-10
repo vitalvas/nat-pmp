@@ -6,9 +6,9 @@ import (
 	"net"
 	"net/netip"
 
-	"github.com/vitalvas/nat-pmp/internal/config"
-	"github.com/vitalvas/nat-pmp/internal/netgw"
-	"github.com/vitalvas/nat-pmp/internal/portmapper"
+	"go.vitalvas.com/nat-pmp/internal/config"
+	"go.vitalvas.com/nat-pmp/internal/netgw"
+	"go.vitalvas.com/nat-pmp/internal/portmapper"
 )
 
 // defaultGateway discovers the LAN gateway via the OS routing table.

@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/vitalvas/nat-pmp/internal/portmapper"
+	"go.vitalvas.com/nat-pmp/internal/portmapper"
 )
 
 var testGW = netip.MustParseAddr("192.168.1.1")

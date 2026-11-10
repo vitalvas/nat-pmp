@@ -6,8 +6,8 @@ import (
 	"log/slog"
 	"net/netip"
 
-	"github.com/vitalvas/nat-pmp/internal/mapping"
-	"github.com/vitalvas/nat-pmp/internal/portmapper"
+	"go.vitalvas.com/nat-pmp/internal/mapping"
+	"go.vitalvas.com/nat-pmp/internal/portmapper"
 )
 
 // ensure creates or refreshes a single mapping and returns the granted lease.

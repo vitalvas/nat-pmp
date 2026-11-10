@@ -11,11 +11,11 @@ import (
 	"net/netip"
 	"time"
 
-	"github.com/vitalvas/nat-pmp/internal/config"
-	"github.com/vitalvas/nat-pmp/internal/mapping"
-	"github.com/vitalvas/nat-pmp/internal/portcheck"
-	"github.com/vitalvas/nat-pmp/internal/portmapper"
-	"github.com/vitalvas/nat-pmp/internal/portmapper/upnp"
+	"go.vitalvas.com/nat-pmp/internal/config"
+	"go.vitalvas.com/nat-pmp/internal/mapping"
+	"go.vitalvas.com/nat-pmp/internal/portcheck"
+	"go.vitalvas.com/nat-pmp/internal/portmapper"
+	"go.vitalvas.com/nat-pmp/internal/portmapper/upnp"
 )
 
 // releaseTimeout bounds the best-effort release of each mapping on shutdown.

@@ -14,8 +14,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/vitalvas/nat-pmp/internal/config"
-	"github.com/vitalvas/nat-pmp/internal/daemon"
+	"go.vitalvas.com/nat-pmp/internal/config"
+	"go.vitalvas.com/nat-pmp/internal/daemon"
 )
 
 // Execute runs the root command and returns a process exit code.

@@ -8,7 +8,7 @@ import (
 	"net/netip"
 	"time"
 
-	"github.com/vitalvas/nat-pmp/internal/mapping"
+	"go.vitalvas.com/nat-pmp/internal/mapping"
 )
 
 // ProtocolName identifies this protocol in logs and detection ordering.

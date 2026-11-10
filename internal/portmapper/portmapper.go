@@ -9,7 +9,7 @@ import (
 	"errors"
 	"net/netip"
 
-	"github.com/vitalvas/nat-pmp/internal/mapping"
+	"go.vitalvas.com/nat-pmp/internal/mapping"
 )
 
 // Sentinel errors that protocol implementations return so that callers can

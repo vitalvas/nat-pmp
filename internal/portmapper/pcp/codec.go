@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"net/netip"
 
-	"github.com/vitalvas/nat-pmp/internal/mapping"
-	"github.com/vitalvas/nat-pmp/internal/portmapper"
+	"go.vitalvas.com/nat-pmp/internal/mapping"
+	"go.vitalvas.com/nat-pmp/internal/portmapper"
 )
 
 // protoVersion is the PCP protocol version (RFC 6887 uses 2).

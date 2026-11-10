@@ -4,7 +4,7 @@ import (
 	"context"
 	"os"
 
-	"github.com/vitalvas/nat-pmp/internal/cli"
+	"go.vitalvas.com/nat-pmp/internal/cli"
 )
 
 // version is set by the linker via -ldflags at release time.

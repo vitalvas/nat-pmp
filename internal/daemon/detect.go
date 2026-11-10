@@ -6,11 +6,11 @@ import (
 	"net/netip"
 	"time"
 
-	"github.com/vitalvas/nat-pmp/internal/config"
-	"github.com/vitalvas/nat-pmp/internal/portmapper"
-	"github.com/vitalvas/nat-pmp/internal/portmapper/natpmp"
-	"github.com/vitalvas/nat-pmp/internal/portmapper/pcp"
-	"github.com/vitalvas/nat-pmp/internal/portmapper/upnp"
+	"go.vitalvas.com/nat-pmp/internal/config"
+	"go.vitalvas.com/nat-pmp/internal/portmapper"
+	"go.vitalvas.com/nat-pmp/internal/portmapper/natpmp"
+	"go.vitalvas.com/nat-pmp/internal/portmapper/pcp"
+	"go.vitalvas.com/nat-pmp/internal/portmapper/upnp"
 )
 
 // candidate pairs a protocol name with a factory that builds its client.

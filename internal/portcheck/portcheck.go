@@ -12,7 +12,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/vitalvas/nat-pmp/internal/mapping"
+	"go.vitalvas.com/nat-pmp/internal/mapping"
 )
 
 // tcpListenState is the value the kernel records in the "st" column of

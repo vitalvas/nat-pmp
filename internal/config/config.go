@@ -12,7 +12,7 @@ import (
 
 	"github.com/vitalvas/gokit/xconfig"
 
-	"github.com/vitalvas/nat-pmp/internal/mapping"
+	"go.vitalvas.com/nat-pmp/internal/mapping"
 )
 
 // EnvPrefix is the prefix used for environment-variable overrides.

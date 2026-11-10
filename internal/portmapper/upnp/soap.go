@@ -8,7 +8,7 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/vitalvas/nat-pmp/internal/portmapper"
+	"go.vitalvas.com/nat-pmp/internal/portmapper"
 )
 
 // httpDoer is the subset of *http.Client used by the client, abstracted so

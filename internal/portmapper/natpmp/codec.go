@@ -7,8 +7,8 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	"github.com/vitalvas/nat-pmp/internal/mapping"
-	"github.com/vitalvas/nat-pmp/internal/portmapper"
+	"go.vitalvas.com/nat-pmp/internal/mapping"
+	"go.vitalvas.com/nat-pmp/internal/portmapper"
 )
 
 // protoVersion is the NAT-PMP protocol version (RFC 6886 uses 0).

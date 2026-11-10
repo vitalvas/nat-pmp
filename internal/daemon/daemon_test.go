@@ -12,10 +12,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/vitalvas/nat-pmp/internal/config"
-	"github.com/vitalvas/nat-pmp/internal/mapping"
-	"github.com/vitalvas/nat-pmp/internal/portmapper"
-	"github.com/vitalvas/nat-pmp/internal/portmapper/upnp"
+	"go.vitalvas.com/nat-pmp/internal/config"
+	"go.vitalvas.com/nat-pmp/internal/mapping"
+	"go.vitalvas.com/nat-pmp/internal/portmapper"
+	"go.vitalvas.com/nat-pmp/internal/portmapper/upnp"
 )
 
 func testLogger() *slog.Logger {

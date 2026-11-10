@@ -7,7 +7,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/vitalvas/nat-pmp/internal/config"
+	"go.vitalvas.com/nat-pmp/internal/config"
 )
 
 func TestLocalAddrForInvalidGateway(t *testing.T) {

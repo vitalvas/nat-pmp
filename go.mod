@@ -1,4 +1,4 @@
-module github.com/vitalvas/nat-pmp
+module go.vitalvas.com/nat-pmp
 
 go 1.26.3
 

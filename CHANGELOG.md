@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.0.0](https://github.com/vitalvas/nat-pmp/compare/v0.4.0...v1.0.0) (2026-11-10)
+
+
+### Features
+
+* migrate module path to go.vitalvas.com/nat-pmp ([e4e0518](https://github.com/vitalvas/nat-pmp/commit/e4e0518e4b2d990c8b8055172bede2e81d23cd90))
+* replace cobra with gokit/xflags on new gokit module path ([c9100d2](https://github.com/vitalvas/nat-pmp/commit/c9100d267fe657cf019f6c58ea0f4a7b8986f010))
+
+
+### Bug Fixes
+
+* harden port mapping protocols ([6af0d25](https://github.com/vitalvas/nat-pmp/commit/6af0d25fd06107ac718a483f60ff08a6af00088d))
+
+
+### Miscellaneous Chores
+
+* release 1.0.0 ([9eb5ff1](https://github.com/vitalvas/nat-pmp/commit/9eb5ff1e68f7238313c9185cae44ac98b6cc0439))
+
 ## [0.4.0](https://github.com/vitalvas/nat-pmp/compare/v0.3.1...v0.4.0) (2026-07-13)
 
 
